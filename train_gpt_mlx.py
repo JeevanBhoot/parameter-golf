@@ -11,6 +11,7 @@ import json
 import math
 import os
 import pickle
+import resource
 import sys
 import time
 import uuid
@@ -50,10 +51,13 @@ class Hyperparameters:
     # Training loop. These defaults now mirror train_gpt.py on a single process.
     iterations: int = int(os.environ.get("ITERATIONS", 20_000))
     val_loss_every: int = int(os.environ.get("VAL_LOSS_EVERY", 0))
-    # Validation always uses the full fineweb_val split.
-    val_batch_size: int = int(os.environ.get("VAL_BATCH_SIZE", 524_288))
+    # Validation defaults to the full fineweb_val split. For faster local
+    # iteration, VAL_SUBSET_SEQS can pin a deterministic prefix.
+    val_batch_size: int = int(os.environ.get("VAL_BATCH_SIZE", 8_192))
+    val_subset_seqs: int = int(os.environ.get("VAL_SUBSET_SEQS", 0))
+    skip_final_float_val: bool = bool(int(os.environ.get("SKIP_FINAL_FLOAT_VAL", "0")))
     train_log_every: int = int(os.environ.get("TRAIN_LOG_EVERY", 200))
-    train_batch_tokens: int = int(os.environ.get("TRAIN_BATCH_TOKENS", 524_288))
+    train_batch_tokens: int = int(os.environ.get("TRAIN_BATCH_TOKENS", 8_192))
     grad_accum_steps: int = int(os.environ.get("GRAD_ACCUM_STEPS", 8))
     train_seq_len: int = int(os.environ.get("TRAIN_SEQ_LEN", os.environ.get("TRAIN_MAX_SEQ_LEN", 1024)))
     # Chunk each logical MLX microbatch into smaller sub-batches to reduce peak
@@ -159,6 +163,21 @@ def accumulate_flat_grads(
     for k, g in flat.items():
         accum[k] = accum[k] + g * scale
     return accum
+
+
+def peak_rss_bytes() -> int:
+    rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    # macOS reports bytes; Linux typically reports KiB.
+    return rss if sys.platform == "darwin" else rss * 1024
+
+
+def format_bytes(num_bytes: int) -> str:
+    value = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or unit == "TiB":
+            return f"{value:.2f}{unit}"
+        value /= 1024.0
+    return f"{num_bytes}B"
 
 
 # ==============================================================================
@@ -734,6 +753,17 @@ def load_validation_tokens(pattern: str, seq_len: int) -> np.ndarray:
     return tokens[: usable + 1]
 
 
+def select_validation_tokens(tokens: np.ndarray, seq_len: int, subset_seqs: int) -> tuple[np.ndarray, int, int]:
+    total_seqs = (tokens.size - 1) // seq_len
+    if subset_seqs <= 0:
+        return tokens, total_seqs, total_seqs
+    selected_seqs = min(subset_seqs, total_seqs)
+    if selected_seqs <= 0:
+        raise ValueError(f"VAL_SUBSET_SEQS must be positive when set, got {subset_seqs}")
+    selected_tokens = np.ascontiguousarray(tokens[: selected_seqs * seq_len + 1])
+    return selected_tokens, selected_seqs, total_seqs
+
+
 def loss_and_grad_chunked(
     args: Hyperparameters,
     train_loader: TokenLoader,
@@ -843,11 +873,14 @@ def main() -> None:
         with logfile.open("a", encoding="utf-8") as f:
             print(msg, file=f)
 
-    code = Path(__file__).read_text(encoding="utf-8")
+    code_path = Path(__file__)
+    code = code_path.read_text(encoding="utf-8")
+    code_bytes = len(code.encode("utf-8"))
     log(code, console=False)
     log("=" * 100, console=False)
     log(f"Running Python {sys.version}", console=False)
     log(f"Running MLX {mx.__version__}", console=False)
+    log(f"code_bytes:{code_bytes}", console=False)
     log("=" * 100, console=False)
 
     if not args.tie_embeddings:
@@ -863,7 +896,11 @@ def main() -> None:
         args.data_path,
         args.tokenizer_path,
     )
-    val_tokens = load_validation_tokens(args.val_files, args.train_seq_len)
+    val_tokens, selected_val_seqs, total_val_seqs = select_validation_tokens(
+        load_validation_tokens(args.val_files, args.train_seq_len),
+        args.train_seq_len,
+        args.val_subset_seqs,
+    )
 
     base_bytes_lut, has_leading_space_lut, is_boundary_token_lut = build_sentencepiece_luts(
         sp, args.vocab_size
@@ -914,6 +951,13 @@ def main() -> None:
     log(f"mlx_version:{mx.__version__}")
     log(f"train_loader:shards pattern={args.train_files}")
     log(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.size - 1}")
+    if selected_val_seqs < total_val_seqs:
+        log(
+            f"val_loader:subset mode=prefix seqs:{selected_val_seqs}/{total_val_seqs} "
+            f"tokens:{val_tokens.size - 1}"
+        )
+    else:
+        log(f"val_loader:subset mode=full seqs:{selected_val_seqs}/{total_val_seqs}")
     if expected_train_files is None:
         log(f"train_loader:dataset:{dataset_name} train_shards:{actual_train_files}")
     elif actual_train_files < expected_train_files:
@@ -996,23 +1040,28 @@ def main() -> None:
     step = 0
     while True:
         last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
-        if last_step or (args.val_loss_every > 0 and step % args.val_loss_every == 0):
+        should_run_periodic_val = args.val_loss_every > 0 and step % args.val_loss_every == 0 and not last_step
+        should_run_final_float_val = last_step and not args.skip_final_float_val
+        if last_step or should_run_periodic_val:
             train_time_ms += 1000.0 * (time.perf_counter() - t0)
-            # Validation always scans the same fixed full validation split.
-            val_loss, val_bpb = eval_val(
-                args,
-                compiled_loss,
-                val_tokens,
-                base_bytes_lut,
-                has_leading_space_lut,
-                is_boundary_token_lut,
-                log_fn=log,
-            )
-            if step % 25 == 0 or last_step:
-                log(
-                    f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
-                    f"train_time:{train_time_ms:.0f}ms step_avg:{train_time_ms / max(step, 1):.2f}ms"
+            if should_run_periodic_val or should_run_final_float_val:
+                # Validation always scans the same fixed token prefix selected at startup.
+                val_loss, val_bpb = eval_val(
+                    args,
+                    compiled_loss,
+                    val_tokens,
+                    base_bytes_lut,
+                    has_leading_space_lut,
+                    is_boundary_token_lut,
+                    log_fn=log,
                 )
+                if step % 25 == 0 or last_step:
+                    log(
+                        f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
+                        f"train_time:{train_time_ms:.0f}ms step_avg:{train_time_ms / max(step, 1):.2f}ms"
+                    )
+            elif last_step:
+                log(f"skipping_final_float_val:1 train_time:{train_time_ms:.0f}ms step:{step}/{args.iterations}")
             t0 = time.perf_counter()
         if last_step:
             if stop_after_step is not None and step < args.iterations:
@@ -1048,6 +1097,9 @@ def main() -> None:
         if max_wallclock_ms is not None and stop_after_step is None and approx_train_time_ms >= max_wallclock_ms:
             stop_after_step = step
 
+    train_peak_rss = peak_rss_bytes()
+    log(f"train_peak_rss_bytes:{train_peak_rss} train_peak_rss:{format_bytes(train_peak_rss)}")
+
     # ==============================================================================
     # FINAL SERIALIZATION + QUANTIZED ROUNDTRIP EVAL
     # ==============================================================================
@@ -1072,6 +1124,7 @@ def main() -> None:
         f"serialized_model_int8_zlib:{quant_file_bytes} bytes "
         f"(payload:{quant_stats['int8_payload_bytes']} raw_pickle:{quant_serialized_bytes} payload_ratio:{ratio:.2f}x)"
     )
+    log(f"artifact_bytes_int8_zlib:{quant_file_bytes + code_bytes}")
 
     with quant_path.open("rb") as f:
         quant_blob_disk = f.read()
