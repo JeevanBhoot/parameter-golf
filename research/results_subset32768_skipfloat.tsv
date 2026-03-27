@@ -1,0 +1,9 @@
+run_tag	val_bpb	artifact_bytes	time	train_peak_rss_bytes	status	description
+2026-03-26_mlx_quickbaseline_int8_rtn_zlib_val32768_skipfloat	1.90859022	12972589	16:45.91	1534263296	keep	Quick baseline with VAL_SUBSET_SEQS=32768 and SKIP_FINAL_FLOAT_VAL=1
+2026-03-26_mlx_quick_attnproj_fp16_val32768_skipfloat	1.90831495	15556393	16:50.40	1535180800	keep	Keep all attn.proj.weight tensors in fp16 passthrough
+2026-03-26_mlx_quick_cq_fp16_val32768_skipfloat	1.90688970	15664330	16:30.54	1535655936	keep	Keep all attn.c_q.weight tensors in fp16 passthrough
+2026-03-26_mlx_quick_tokemb_fp16_val32768_skipfloat	1.90296877	13528468	16:31.44	1534754816	keep	Keep tok_emb.weight in fp16 passthrough
+2026-03-26_mlx_quick_b8_mlpproj_fp16_val32768_skipfloat	1.89782535	13806627	16:33.22	1535344640	keep	Keep only blocks.8.mlp.proj.weight in fp16 passthrough
+2026-03-26_mlx_quick_top2_mlpproj_fp16_val32768_skipfloat	1.90794527	14356628	16:37.00	1535836160	discard	Keep blocks.8.mlp.proj.weight and blocks.3.mlp.proj.weight in fp16 passthrough
+2026-03-26_mlx_quick_int6_rtn_int8store_val32768_skipfloat	1.91171778	9561079	16:31.91	1534967808	keep	Pure INT6 RTN with int8 storage and the same zlib artifact format
+2026-03-26_mlx_quick_mseclipsearch_val32768_skipfloat	1.90526995	13120228	16:37.42	1111146496	keep	Per-row and per-tensor MSE clip search over multiple int8 clip quantiles

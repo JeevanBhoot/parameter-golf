@@ -1,0 +1,8 @@
+- hypothesis: Keeping only `blocks.8.mlp.proj.weight` in fp16 passthrough will recover a disproportionately large chunk of quantization error at a modest byte cost.
+- exact change made: The large tensor `blocks.8.mlp.proj.weight` bypasses int8 quantization and is stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision change for a targeted high-error weight tensor.
+- expected effect on val_bpb: Improve relative to the quick baseline, potentially with a better byte-efficiency tradeoff than the broader fp16 keep sets.
+- expected effect on artifact bytes: Increase, but remain comfortably below the cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.89782535`, `artifact_bytes=13806627`, `train_peak_rss_bytes=1535344640`, `time=16:33.22 total`.
+- short conclusion: Keep. This is the best quick-track result so far by a wide margin, with a strong improvement and plenty of artifact headroom left.

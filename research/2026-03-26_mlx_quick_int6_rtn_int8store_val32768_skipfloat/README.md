@@ -1,0 +1,8 @@
+- hypothesis: Lowering the RTN quantizer from signed INT8 levels to signed INT6 levels while still storing values in `int8` arrays may save compressed artifact bytes enough to justify later reinvestment runs, even if quality regresses somewhat.
+- exact change made: The quantizer range changed from `[-127, 127]` to `[-31, 31]` for both per-row matrix quantization and per-tensor vector/scalar quantization. Dequantization and storage layout remain otherwise unchanged, with quantized values still serialized as `int8`.
+- why this is in scope: This is a pure Tier 1 weight-quantization precision ablation with no training, model, or evaluation changes.
+- expected effect on val_bpb: Likely worse than the quick baseline because fewer quantization levels are available.
+- expected effect on artifact bytes: Lower compressed artifact size because the quantized payload should have lower entropy, even before bit packing.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91171778`, `artifact_bytes=9561079`, `train_peak_rss_bytes=1534967808`, `time=16:31.91 total`.
+- short conclusion: Keep. Quality regressed versus the quick baseline, but artifact size dropped by about 3.4 MB while train memory stayed essentially unchanged, so this looks like a real reinvestment-enabling Tier 1 compression result.

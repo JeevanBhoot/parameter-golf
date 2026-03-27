@@ -1,0 +1,8 @@
+- hypothesis: Replacing the fixed clip percentile with a small per-row/per-tensor MSE clip search should reduce weight reconstruction error at roughly the same artifact size, giving a cleaner bridge from RTN toward calibration-style PTQ.
+- exact change made: Instead of always using the single baseline clip quantile, each large float tensor now searches a small candidate set of clip quantiles and picks the one with the lowest dequantized weight MSE. The export format, serializer, and dequantization path stay the same.
+- why this is in scope: This is a quantization-only post-training change to how int8 scales and clips are chosen.
+- expected effect on val_bpb: Improve relative to the quick baseline if lower-MSE clipping tracks the important outlier rows better.
+- expected effect on artifact bytes: Similar to baseline int8, with a possible small gain if the selected clips increase compressibility.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90526995`, `artifact_bytes=13120228`, `train_peak_rss_bytes=1111146496`, `time=16:37.42 total`.
+- short conclusion: Keep. The MSE clip search improved on the quick baseline at only a small byte cost, making it a solid general-purpose PTQ upgrade, although it still trails the best targeted `blocks.8.mlp.proj.weight` fp16 keep-set.

@@ -1,0 +1,7 @@
+- hypothesis: Finer-grained int8 scales over 64-column groups will reduce post-training quantization error enough to improve `val_bpb`, while keeping the artifact comfortably under 16 MB.
+- exact change made: Changed 2D weight quantization from one scale per row to one scale per row per 64-column group. Small-tensor passthrough, non-2D tensor quantization, training, and evaluation are unchanged.
+- why this is in scope: This is a quantization-only change to weight quantization granularity.
+- expected effect on val_bpb: Slight improvement from lower quantization error.
+- expected effect on artifact bytes: Small increase from additional scale tensors.
+- final result: `val_bpb=1.89754067`, `artifact_bytes=13103775`, `time=33:57.89 total`.
+- short conclusion: Discard. Grouped column scales slightly increased artifact size and worsened `val_bpb` versus the baseline.

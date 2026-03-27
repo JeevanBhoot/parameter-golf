@@ -1,0 +1,8 @@
+- hypothesis: Establish the new quick-track baseline using a fixed 32,768-sequence validation prefix and skipping the final float-model validation pass.
+- exact change made: No quantization change. Ran the copied script with `VAL_SUBSET_SEQS=32768` and `SKIP_FINAL_FLOAT_VAL=1`.
+- why this is in scope: This redefines the local experiment protocol for faster quantization-only iteration while keeping the validation subset fixed across runs.
+- expected effect on val_bpb: Different absolute baseline from full validation because this is a new deterministic subset metric.
+- expected effect on artifact bytes: Match the baseline int8 RTN + zlib artifact within normal run variance.
+- train memory budget rule: Future runs should stay at or below this baseline `train_peak_rss_bytes`, with only slight overage tolerated.
+- final result: `val_bpb=1.90859022`, `artifact_bytes=12972589`, `train_peak_rss_bytes=1534263296`, `time=16:45.91 total`.
+- short conclusion: This is the new quick-track reference baseline for all subset-32768 experiments with skipped final float validation.

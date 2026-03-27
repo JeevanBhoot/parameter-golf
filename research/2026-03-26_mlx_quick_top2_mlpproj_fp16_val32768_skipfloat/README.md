@@ -1,0 +1,8 @@
+- hypothesis: Keeping the two highest-error `mlp.proj.weight` tensors in fp16 passthrough will improve the quick-track score further than the single-layer keep, while staying under the artifact and memory limits.
+- exact change made: The tensors `blocks.8.mlp.proj.weight` and `blocks.3.mlp.proj.weight` bypass int8 quantization and are stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision outlier-weight experiment, extending the successful single-layer `mlp.proj` result.
+- expected effect on val_bpb: Improve relative to the single-layer `blocks.8.mlp.proj.weight` keep.
+- expected effect on artifact bytes: Increase, but remain below the cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90794527`, `artifact_bytes=14356628`, `train_peak_rss_bytes=1535836160`, `time=16:37.00 total`.
+- short conclusion: Discard. Adding `blocks.3.mlp.proj.weight` to the successful single-layer keep-set made the result much worse while also increasing artifact size, so the extra passthrough tensor is not worth it.

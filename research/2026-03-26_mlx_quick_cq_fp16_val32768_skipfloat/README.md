@@ -1,0 +1,8 @@
+- hypothesis: Keeping all `attn.c_q.weight` tensors in fp16 passthrough will reduce quantization error enough to improve the quick-track `val_bpb`, while staying under the artifact cap.
+- exact change made: Large tensors named `attn.c_q.weight` bypass int8 quantization and are stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision change for a targeted weight subset.
+- expected effect on val_bpb: Improve relative to the quick baseline.
+- expected effect on artifact bytes: Increase, but remain below the cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90688970`, `artifact_bytes=15664330`, `train_peak_rss_bytes=1535655936`, `time=16:30.54 total`.
+- short conclusion: Keep. This is the best quick-track result so far, improving over both the quick baseline and the `attn.proj.weight` fp16 run while staying within the artifact and memory limits.

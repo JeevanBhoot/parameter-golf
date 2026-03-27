@@ -1,0 +1,8 @@
+- hypothesis: Keeping all `attn.c_v.weight` tensors in fp16 passthrough may recover more useful attention-path quantization error than the `attn.c_q` or `attn.proj` keep-sets, while still staying under the 16 MB artifact budget.
+- exact change made: Every tensor whose name ends with `attn.c_v.weight` bypasses int8 quantization and is stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision Tier 1 ablation on one tensor family.
+- expected effect on val_bpb: Potentially improve relative to the quick baseline if value-projection weights are especially sensitive to int8 RTN.
+- expected effect on artifact bytes: Increase, but remain under the artifact cap by the current estimate.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.

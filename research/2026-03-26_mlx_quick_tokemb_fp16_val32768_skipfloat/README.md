@@ -1,0 +1,8 @@
+- hypothesis: Keeping `tok_emb.weight` in fp16 passthrough will recover some quantization error at modest byte cost and may improve the quick-track `val_bpb`.
+- exact change made: The large tensor named `tok_emb.weight` bypasses int8 quantization and is stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision change for a targeted weight tensor.
+- expected effect on val_bpb: Slight improvement relative to the quick baseline.
+- expected effect on artifact bytes: Small increase, still below the cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90296877`, `artifact_bytes=13528468`, `train_peak_rss_bytes=1534754816`, `time=16:31.44 total`.
+- short conclusion: Keep. This is the best quick-track result so far, with a large quality gain over baseline at relatively low artifact cost and baseline-level training memory.

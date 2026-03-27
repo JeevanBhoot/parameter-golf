@@ -1,0 +1,7 @@
+- hypothesis: Establish the exact MLX baseline before any quantization-only changes.
+- exact change made: No code change beyond copying the current top-level `train_gpt_mlx.py` into this run folder and running it as-is.
+- why this is in scope: This is the required baseline run for the quantization-only research loop.
+- expected effect on val_bpb: Match the current baseline behavior.
+- expected effect on artifact bytes: Match the current int8 RTN + zlib artifact size for the copied script.
+- final result: `val_bpb=1.89537158`, `artifact_bytes=13096769`, `time=33:47.19 total`.
+- short conclusion: Baseline matches the documented MLX reference result and is the starting point for follow-up quantization-only runs.

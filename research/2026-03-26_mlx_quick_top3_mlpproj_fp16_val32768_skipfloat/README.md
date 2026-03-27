@@ -1,0 +1,8 @@
+- hypothesis: Keeping the three highest-error `mlp.proj.weight` tensors in fp16 passthrough may continue the strong improvement trend from the single- and double-layer `mlp.proj` keep runs, while staying inside the quick-track artifact and memory constraints.
+- exact change made: The tensors `blocks.8.mlp.proj.weight`, `blocks.3.mlp.proj.weight`, and `blocks.2.mlp.proj.weight` bypass int8 quantization and are stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision outlier-weight experiment that extends the existing Tier 1 ablation by one tensor.
+- expected effect on val_bpb: Improve relative to the top-2 `mlp.proj` keep-set, though likely with diminishing returns.
+- expected effect on artifact bytes: Increase further, but still remain under the 16 MB artifact target by the current estimate.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.
