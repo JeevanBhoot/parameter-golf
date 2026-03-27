@@ -1,0 +1,8 @@
+- hypothesis: The strongest current general compression method may not need a full fp16 tied head; quantizing the tied embedding/output head to INT8 while keeping the rest of the model at `INT5 + group64` could preserve most of the quality and shrink the artifact further.
+- exact change made: Quantize all large floating-point tensors with the `INT5 + group64` scheme except `tok_emb.weight`, which is quantized to INT8 with the same group-of-64 scaling structure instead of being kept in fp16.
+- why this is in scope: This is an architecture-agnostic mixed-bit policy by parameter role, not by layer identity. It tests whether the tied head needs higher precision than the rest of the model, but not necessarily full fp16.
+- expected effect on val_bpb: Worsen somewhat relative to the `INT5 + group64 + fp16 tied head` run, but ideally stay much better than plain INT5 while remaining competitive.
+- expected effect on artifact bytes: Improve relative to the fp16-head version because the head should compress more strongly as INT8 than as fp16.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90936325`, `artifact_bytes=7531829`, `train_peak_rss_bytes=1535377408`, `time=16:37.49 total`.
+- short conclusion: Keep. Quantizing the tied head to INT8 instead of fp16 only gives up a small amount of quality while cutting the artifact further, which makes this a strong architecture-agnostic mixed-bit policy and a better compression point than the fp16-head version if we value bytes more heavily.

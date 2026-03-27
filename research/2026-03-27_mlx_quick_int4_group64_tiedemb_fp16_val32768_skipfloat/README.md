@@ -1,0 +1,8 @@
+- hypothesis: Since `INT5 + group64 + tied head` already beats the quick baseline while staying under 8 MB, pushing the same general method down to INT4 may open a much stronger reinvestment regime while still preserving usable quality.
+- exact change made: Quantize large floating-point tensors to signed INT4 using group-of-64 column scales for 2D weights, keep per-tensor scales for non-matrices, and keep `tok_emb.weight` in fp16 because it is also the tied output head.
+- why this is in scope: This is a one-variable, architecture-agnostic follow-up on the strongest current general compression method. It changes only the global quantization bitwidth.
+- expected effect on val_bpb: Worsen relative to the INT5 group-of-64 run, but hopefully stay competitive enough to justify later reinvestment.
+- expected effect on artifact bytes: Improve materially relative to the INT5 group-of-64 run because lower-magnitude quantized values should compress more strongly.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.95092453`, `artifact_bytes=5433965`, `train_peak_rss_bytes=1535787008`, `time=16:47.72 total`.
+- short conclusion: Keep. This is too degraded to be a direct submission path, but at about 5.43 MB it is the strongest compression result yet and clearly worth retaining as an aggressive reinvestment candidate.

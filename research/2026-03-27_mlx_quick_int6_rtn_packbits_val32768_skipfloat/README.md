@@ -1,0 +1,8 @@
+- hypothesis: Packing the promising INT6 RTN weights into true 6-bit storage before zlib should cut artifact bytes materially beyond the unpacked INT6 run while preserving the same validation quality.
+- exact change made: Keep the same signed INT6 RTN quantizer from the prior run, but serialize quantized values in packed 6-bit form instead of storing them as one value per `int8` byte. Dequantization unpacks them back before evaluation.
+- why this is in scope: This is a pure Tier 1 serialization and packing experiment on an already-tested quantization scheme.
+- expected effect on val_bpb: Match or nearly match the unpacked INT6 run, since the quantized values themselves are unchanged.
+- expected effect on artifact bytes: Improve substantially relative to the unpacked INT6 run because raw quantized payload drops from 8 bits/value to 6 bits/value before zlib.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91314486`, `artifact_bytes=10531333`, `train_peak_rss_bytes=1533591552`, `time=16:32.82 total`.
+- short conclusion: Discard. The packbits path was verified to preserve the exact INT6 quantized values, but it still made the compressed artifact larger than the unpacked INT6 run while also landing a slightly worse score, so zlib clearly prefers the original byte layout here.

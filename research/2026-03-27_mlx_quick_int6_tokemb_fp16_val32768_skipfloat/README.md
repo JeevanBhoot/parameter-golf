@@ -1,0 +1,8 @@
+- hypothesis: Combining the strong byte savings from INT6 RTN with fp16 token embeddings may recover more quality than the INT6 plus `blocks.8.mlp.proj.weight` variant while still staying comfortably under the artifact cap.
+- exact change made: Start from the INT6 RTN-in-int8-storage quantizer, and additionally keep `tok_emb.weight` in fp16 passthrough. All other tensors follow the INT6 quantization path.
+- why this is in scope: This is a quantization-only Tier 1 mixed-precision follow-up that adds one targeted exception to a promising low-bit baseline.
+- expected effect on val_bpb: Improve relative to the pure INT6 run if token embeddings are a major source of low-bit quality loss.
+- expected effect on artifact bytes: Increase relative to pure INT6, but remain well below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90417061`, `artifact_bytes=10007819`, `train_peak_rss_bytes=1535655936`, `time=16:33.16 total`.
+- short conclusion: Keep. This is a strong low-bit mixed-precision result: it beats the quick baseline by a clear margin while staying about 3 MB below the baseline artifact and far below the 16 MB cap.

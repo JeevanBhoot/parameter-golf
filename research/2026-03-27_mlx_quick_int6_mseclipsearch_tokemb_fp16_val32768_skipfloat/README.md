@@ -1,0 +1,8 @@
+- hypothesis: If INT6 MSE clip search already reduces low-bit quantization error, then keeping `tok_emb.weight` in fp16 may stack cleanly on top and yield a stronger low-byte frontier point than the earlier INT6 RTN + token-embedding run.
+- exact change made: Start from the INT6 MSE clip-search quantizer and additionally keep `tok_emb.weight` in fp16 passthrough. All other tensors remain on the INT6 MSE clip-search path.
+- why this is in scope: This is a quantization-only Tier 1 mixed-precision follow-up to a low-bit scheme, intended to test whether the previously strong token-embedding exception transfers to the better INT6 quantizer.
+- expected effect on val_bpb: Improve relative to pure INT6 MSE clip search, and ideally beat the earlier INT6 RTN + `tok_emb.weight` run.
+- expected effect on artifact bytes: Increase relative to pure INT6 MSE clip search, but stay far below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.

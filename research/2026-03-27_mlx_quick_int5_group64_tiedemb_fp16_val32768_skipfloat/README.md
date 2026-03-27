@@ -1,0 +1,8 @@
+- hypothesis: If group-wise scales are the missing ingredient for low-bit quality, then INT5 with 64-column group scales plus a high-precision tied head may outperform the plain INT5+tied-head run at a similar byte budget.
+- exact change made: Quantize large floating-point tensors to signed INT5 using group-of-64 column scales for 2D weights, keep per-tensor scales for non-matrices, and keep `tok_emb.weight` in fp16 because it is also the tied output head.
+- why this is in scope: This is an architecture-agnostic low-bit compression method. It combines a global bitwidth change, a standard per-group scaling scheme, and a structural tied-head exception that transfers across tied-embedding language models.
+- expected effect on val_bpb: Improve relative to plain INT5+tied-head if group scales matter enough at this bitwidth.
+- expected effect on artifact bytes: Stay well below baseline and likely remain below the plain INT6+tied-head artifact, with some overhead versus plain INT5 from the extra scales.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90768788`, `artifact_bytes=7841202`, `train_peak_rss_bytes=1534001152`, `time=16:36.97 total`.
+- short conclusion: Keep. This is the strongest architecture-agnostic compression result so far: it beats the quick baseline on `val_bpb` while shrinking the artifact to about 7.84 MB, which makes the low-bit group-scale path the clear frontier for reinvestment-oriented follow-ups.

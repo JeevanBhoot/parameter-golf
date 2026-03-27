@@ -1,0 +1,8 @@
+- hypothesis: Combining the best single-layer keep-set, `blocks.8.mlp.proj.weight`, with the strongest whole-family keep-set, all `attn.c_v.weight` tensors, may outperform either one alone while staying under the artifact cap.
+- exact change made: Keep `blocks.8.mlp.proj.weight` and every tensor whose name ends with `attn.c_v.weight` in fp16 passthrough. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision Tier 1 follow-up that combines two previously successful fp16 keep targets.
+- expected effect on val_bpb: Improve relative to the separate `blocks.8.mlp.proj.weight` and `all attn.c_v.weight` runs if their gains are complementary.
+- expected effect on artifact bytes: Increase relative to either individual keep-set, but remain below the 16 MB cap by the current estimate.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.

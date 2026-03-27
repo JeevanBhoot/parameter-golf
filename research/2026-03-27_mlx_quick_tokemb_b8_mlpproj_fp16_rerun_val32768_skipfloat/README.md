@@ -1,0 +1,8 @@
+- hypothesis: The two strongest single-tensor fp16 keep-sets so far, `tok_emb.weight` and `blocks.8.mlp.proj.weight`, may stack into a stronger frontier point than either alone while remaining safely under the 16 MB cap.
+- exact change made: Keep `tok_emb.weight` and `blocks.8.mlp.proj.weight` in fp16 passthrough while all other tensors follow the default int8 RTN + zlib path.
+- why this is in scope: This is a Tier 1 mixed-precision quantization-only rerun of a high-value combination after the prior attempt was invalidated by an unusually low training-step count.
+- expected effect on val_bpb: Match or improve on the best single-tensor runs if the two tensors capture different quantization-sensitive failure modes.
+- expected effect on artifact bytes: Increase relative to each individual run, but remain comfortably below the 16 MB artifact cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Aborted before completion after a strategy pivot away from hand-picked tensor keep-sets.
+- short conclusion: Not a valid experiment for the active research direction. This rerun was intentionally stopped once the research focus shifted to architecture-agnostic quantization and compression methods.

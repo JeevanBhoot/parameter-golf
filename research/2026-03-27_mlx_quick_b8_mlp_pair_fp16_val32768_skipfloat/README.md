@@ -1,0 +1,8 @@
+- hypothesis: Since both `blocks.8.mlp.proj.weight` and `blocks.8.mlp.fc.weight` individually improve over the quick baseline, keeping the full block-8 MLP in fp16 may recover additional quality while still staying under the artifact cap.
+- exact change made: Keep `blocks.8.mlp.fc.weight` and `blocks.8.mlp.proj.weight` in fp16 passthrough while all other tensors follow the default int8 RTN + zlib path.
+- why this is in scope: This is a Tier 1 mixed-precision quantization-only ablation that tests whether the strongest observed sensitivity is localized to the whole final MLP block rather than only one of its matrices.
+- expected effect on val_bpb: Improve relative to each single block-8 matrix run if their gains are complementary.
+- expected effect on artifact bytes: Increase relative to the single block-8 matrix runs, but remain below the 16 MB artifact cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.

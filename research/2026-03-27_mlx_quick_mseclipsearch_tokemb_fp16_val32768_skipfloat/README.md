@@ -1,0 +1,8 @@
+- hypothesis: Combining the general MSE clip-search quantizer with fp16 token embeddings may outperform either idea alone while still remaining well below the 16 MB artifact cap.
+- exact change made: Start from the per-row/per-tensor MSE clip-search int8 quantizer, and additionally keep `tok_emb.weight` in fp16 passthrough. All other tensors follow the MSE clip-search path.
+- why this is in scope: This is a quantization-only mixed-precision follow-up that adds one targeted high-value exception to a promising PTQ baseline.
+- expected effect on val_bpb: Improve relative to the pure MSE clip-search run and potentially rival the best current quick-track results.
+- expected effect on artifact bytes: Increase relative to pure MSE clip-search, but stay comfortably below the artifact cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90989535`, `artifact_bytes=13341918`, `train_peak_rss_bytes=1110671360`, `time=16:46.68 total`.
+- short conclusion: Discard. This combination was unexpectedly much worse than both `tok_emb.weight` fp16 on its own and pure MSE clip search, so the clip-search quantizer and token-embedding passthrough do not combine well in this form despite the still-reasonable artifact size.

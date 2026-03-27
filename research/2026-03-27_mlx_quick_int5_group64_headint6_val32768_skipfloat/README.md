@@ -1,0 +1,8 @@
+- hypothesis: The tied head may not need fp16, but it may still need more than `INT5`; quantizing the body to `INT5 + group64` while giving the tied head `INT6` could capture most of the fp16-head quality at a smaller artifact size.
+- exact change made: Quantize all large floating-point tensors with the `INT5 + group64` scheme except `tok_emb.weight`, which is quantized to INT6 with the same group-of-64 scaling structure instead of being kept in fp16.
+- why this is in scope: This is an architecture-agnostic mixed-bit policy by parameter role. It tests a single structural precision rule that can transfer across tied-embedding language models of different sizes.
+- expected effect on val_bpb: Land between the fp16-head and INT8-head versions, ideally preserving most of the fp16-head quality.
+- expected effect on artifact bytes: Improve relative to the fp16-head version while likely sitting above the INT8-head version.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: Pending.
+- short conclusion: Pending execution.

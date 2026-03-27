@@ -7,3 +7,20 @@ run_tag	val_bpb	artifact_bytes	time	train_peak_rss_bytes	status	description
 2026-03-26_mlx_quick_top2_mlpproj_fp16_val32768_skipfloat	1.90794527	14356628	16:37.00	1535836160	discard	Keep blocks.8.mlp.proj.weight and blocks.3.mlp.proj.weight in fp16 passthrough
 2026-03-26_mlx_quick_int6_rtn_int8store_val32768_skipfloat	1.91171778	9561079	16:31.91	1534967808	keep	Pure INT6 RTN with int8 storage and the same zlib artifact format
 2026-03-26_mlx_quick_mseclipsearch_val32768_skipfloat	1.90526995	13120228	16:37.42	1111146496	keep	Per-row and per-tensor MSE clip search over multiple int8 clip quantiles
+2026-03-27_mlx_quick_allcv_fp16_val32768_skipfloat	1.90486882	14409723	16:31.56	1534558208	keep	Keep all attn.c_v.weight tensors in fp16 passthrough
+2026-03-27_mlx_quick_int6_rtn_packbits_val32768_skipfloat	1.91314486	10531333	16:32.82	1533591552	discard	Pack the same INT6 RTN weights into 6-bit storage before zlib
+2026-03-27_mlx_quick_allck_fp16_val32768_skipfloat	1.90747738	14385746	16:38.77	1111719936	discard	Keep all attn.c_k.weight tensors in fp16 passthrough
+2026-03-27_mlx_quick_int6_b8_mlpproj_fp16_val32768_skipfloat	1.91199476	10320727	16:34.91	1535262720	discard	INT6 RTN with blocks.8.mlp.proj.weight kept in fp16 passthrough
+2026-03-27_mlx_quick_int6_tokemb_fp16_val32768_skipfloat	1.90417061	10007819	16:33.16	1535655936	keep	INT6 RTN with tok_emb.weight kept in fp16 passthrough
+2026-03-27_mlx_quick_mseclipsearch_b8_mlpproj_fp16_val32768_skipfloat	1.90395442	13768781	16:33.39	1533411328	discard	MSE clip-search int8 quantization with blocks.8.mlp.proj.weight kept in fp16 passthrough
+2026-03-27_mlx_quick_mseclipsearch_tokemb_fp16_val32768_skipfloat	1.90989535	13341918	16:46.68	1110671360	discard	MSE clip-search int8 quantization with tok_emb.weight kept in fp16 passthrough
+2026-03-27_mlx_quick_int6_mseclipsearch_val32768_skipfloat	1.91603788	9469098	16:38.48	1535918080	discard	INT6 quantization with per-row or per-tensor MSE clip search instead of fixed RTN clipping
+2026-03-27_mlx_quick_b3_mlpproj_fp16_val32768_skipfloat	1.90610433	13737375	16:36.88	1447968768	keep	Keep only blocks.3.mlp.proj.weight in fp16 passthrough
+2026-03-27_mlx_quick_b8_mlpfc_fp16_val32768_skipfloat	1.90714566	13764356	17:37.86	1534640128	keep	Keep only blocks.8.mlp.fc.weight in fp16 passthrough
+2026-03-27_mlx_quick_tokemb_b8_mlpproj_fp16_val32768_skipfloat	1.93192924	13530023	17:29.23	1535639552	invalid	Keep tok_emb.weight and blocks.8.mlp.proj.weight in fp16 passthrough; confounded by unusually low train step count (1109)
+2026-03-27_mlx_quick_int5_tiedemb_fp16_val32768_skipfloat	1.92848979	7645710	17:16.21	1534115840	keep	INT5 RTN for large tensors with the tied embedding/output head kept in fp16
+2026-03-27_mlx_quick_int6_group64_tiedemb_fp16_val32768_skipfloat	1.90376429	10045417	16:32.89	1517289472	keep	INT6 with group-of-64 column scales for 2D weights plus the tied embedding/output head kept in fp16
+2026-03-27_mlx_quick_int5_group64_tiedemb_fp16_val32768_skipfloat	1.90768788	7841202	16:36.97	1534001152	keep	INT5 with group-of-64 column scales for 2D weights plus the tied embedding/output head kept in fp16
+2026-03-27_mlx_quick_int5_group32_tiedemb_fp16_val32768_skipfloat	1.91190363	7846539	16:37.15	1533853696	discard	INT5 with group-of-32 column scales for 2D weights plus the tied embedding/output head kept in fp16
+2026-03-27_mlx_quick_int4_group64_tiedemb_fp16_val32768_skipfloat	1.95092453	5433965	16:47.72	1535787008	keep	INT4 with group-of-64 column scales for 2D weights plus the tied embedding/output head kept in fp16
+2026-03-27_mlx_quick_int5_group64_headint8_val32768_skipfloat	1.90936325	7531829	16:37.49	1535377408	keep	INT5 with group-of-64 column scales for the model body and the tied embedding/output head quantized to INT8

@@ -1,0 +1,8 @@
+- hypothesis: If block 8 is genuinely the most quantization-sensitive MLP block, then keeping `blocks.8.mlp.fc.weight` in fp16 may also recover quality; if not, the earlier win is likely specific to the MLP projection matrix rather than the whole block.
+- exact change made: Keep only `blocks.8.mlp.fc.weight` in fp16 passthrough while all other tensors follow the default int8 RTN + zlib path.
+- why this is in scope: This is a pure Tier 1 single-tensor mixed-precision ablation designed to localize the earlier `blocks.8.mlp.proj.weight` success within the same block.
+- expected effect on val_bpb: Improve relative to the quick baseline if block 8 MLP sensitivity is broad, though likely less than the projection-matrix variant if the effect is matrix-specific.
+- expected effect on artifact bytes: Increase slightly relative to baseline, by roughly the cost of one fp16 1024x512 matrix plus compression effects.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90714566`, `artifact_bytes=13764356`, `train_peak_rss_bytes=1534640128`, `time=17:37.86 total`.
+- short conclusion: Keep. Keeping `blocks.8.mlp.fc.weight` in fp16 does improve on the quick baseline, but it is far weaker than keeping `blocks.8.mlp.proj.weight`, so the earlier block-8 win is mostly about the projection matrix rather than the whole MLP block.

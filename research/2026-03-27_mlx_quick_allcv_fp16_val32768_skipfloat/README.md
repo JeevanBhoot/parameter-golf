@@ -4,5 +4,5 @@
 - expected effect on val_bpb: Potentially improve relative to the quick baseline if value-projection weights are especially sensitive to int8 RTN.
 - expected effect on artifact bytes: Increase, but remain under the artifact cap by the current estimate.
 - train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
-- final result: Pending.
-- short conclusion: Pending execution.
+- final result: `val_bpb=1.90486882`, `artifact_bytes=14409723`, `train_peak_rss_bytes=1534558208`, `time=16:31.56 total`.
+- short conclusion: Keep. This improved on the quick baseline and slightly beat the MSE clip-search run on score, though it is much less byte-efficient than the best single-tensor `blocks.8.mlp.proj.weight` keep-set.

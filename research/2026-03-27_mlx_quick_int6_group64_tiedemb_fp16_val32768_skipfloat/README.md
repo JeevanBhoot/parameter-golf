@@ -1,0 +1,8 @@
+- hypothesis: INT6 with per-row group scales may recover low-bit quality more effectively than plain per-row INT6, while keeping the tied embedding/output head in fp16 preserves the most structurally sensitive weight in a general way.
+- exact change made: Quantize large floating-point tensors to signed INT6 using group-of-64 column scales for 2D weights, keep per-tensor scales for non-matrices, and keep `tok_emb.weight` in fp16 because it is also the tied output head.
+- why this is in scope: This is an architecture-agnostic quantization and compression method. It uses a structural exception plus a standard low-bit scaling scheme that transfers across model sizes and layer counts.
+- expected effect on val_bpb: Improve relative to plain INT6 RTN, ideally preserving more quality while staying well below the quick baseline artifact size.
+- expected effect on artifact bytes: Increase somewhat relative to plain INT6 because of extra group scales, but remain materially smaller than baseline.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90376429`, `artifact_bytes=10045417`, `train_peak_rss_bytes=1517289472`, `time=16:32.89 total`.
+- short conclusion: Keep. Group-of-64 scales are a real low-bit improvement here: they recover noticeably better quality than the plain `INT6 + tied head` run while adding only a tiny amount of artifact size, making this the strongest architecture-agnostic low-byte result so far.

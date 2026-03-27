@@ -1,0 +1,8 @@
+- hypothesis: Keeping all `attn.c_k.weight` tensors in fp16 passthrough may recover a useful slice of attention quantization error at a manageable artifact cost, giving a clean comparison against the successful `attn.c_v` family run.
+- exact change made: Every tensor whose name ends with `attn.c_k.weight` bypasses int8 quantization and is stored in fp16. All other tensors follow the baseline quantization path.
+- why this is in scope: This is a quantization-only mixed-precision Tier 1 ablation on one tensor family.
+- expected effect on val_bpb: Potentially improve relative to the quick baseline if key-projection weights are sensitive to RTN clipping.
+- expected effect on artifact bytes: Increase, but remain under the artifact cap by the current estimate.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90747738`, `artifact_bytes=14385746`, `train_peak_rss_bytes=1111719936`, `time=16:38.77 total`.
+- short conclusion: Discard. This was worse than the quick baseline and clearly worse than the analogous `attn.c_v` fp16 keep-set, so `attn.c_k.weight` is not a good mixed-precision target here.

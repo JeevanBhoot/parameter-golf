@@ -1,0 +1,8 @@
+- hypothesis: Combining the strong byte savings from INT6 RTN with the best-performing single fp16 passthrough tensor, `blocks.8.mlp.proj.weight`, may recover a large chunk of quality while still keeping the artifact dramatically below the 16 MB cap.
+- exact change made: Start from the INT6 RTN-in-int8-storage quantizer, and additionally keep `blocks.8.mlp.proj.weight` in fp16 passthrough. All other tensors follow the INT6 quantization path.
+- why this is in scope: This is still a quantization-only Tier 1 mixed-precision experiment, adding one targeted outlier-weight exception to a promising low-bit baseline.
+- expected effect on val_bpb: Improve materially relative to the pure INT6 run, potentially recovering much of the quality lost from dropping to INT6.
+- expected effect on artifact bytes: Increase relative to pure INT6, but remain far below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91199476`, `artifact_bytes=10320727`, `train_peak_rss_bytes=1535262720`, `time=16:34.91 total`.
+- short conclusion: Discard. Keeping `blocks.8.mlp.proj.weight` in fp16 did not rescue the INT6 run; quality was slightly worse than pure INT6 while the artifact got larger.

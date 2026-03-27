@@ -1,0 +1,8 @@
+- hypothesis: The trained quick baseline checkpoint shows unusually high normalized RTN quantization error on `blocks.3.mlp.proj.weight`, so keeping that single tensor in fp16 may recover quality similarly to the successful `blocks.8.mlp.proj.weight` run.
+- exact change made: Keep only `blocks.3.mlp.proj.weight` in fp16 passthrough while all other tensors follow the default int8 RTN + zlib path.
+- why this is in scope: This is a pure Tier 1 single-tensor mixed-precision ablation, chosen from measured post-training quantization error rather than from architecture intuition alone.
+- expected effect on val_bpb: Improve relative to the quick baseline and reveal whether the earlier `blocks.8.mlp.proj.weight` result generalizes to another high-error MLP projection tensor.
+- expected effect on artifact bytes: Increase slightly relative to baseline, by roughly the cost of one fp16 512x1024 matrix plus compression effects.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90610433`, `artifact_bytes=13737375`, `train_peak_rss_bytes=1447968768`, `time=16:36.88 total`.
+- short conclusion: Keep. This measured single-tensor keep-set did improve on the quick baseline, which suggests the MLP projection family really is a productive target, but it still lagged well behind the much stronger `blocks.8.mlp.proj.weight` result.

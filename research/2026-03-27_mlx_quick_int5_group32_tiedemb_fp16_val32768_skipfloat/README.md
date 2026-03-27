@@ -1,0 +1,8 @@
+- hypothesis: Since `INT5 + group64 + tied head` already beats the quick baseline at a very small artifact size, reducing the group size to 32 may recover more quality while still staying far under the 16 MB cap.
+- exact change made: Quantize large floating-point tensors to signed INT5 using group-of-32 column scales for 2D weights, keep per-tensor scales for non-matrices, and keep `tok_emb.weight` in fp16 because it is also the tied output head.
+- why this is in scope: This is a one-variable, architecture-agnostic follow-up on the strongest current low-bit compression method. Group size is a general quantization hyperparameter that transfers across architectures and model sizes.
+- expected effect on val_bpb: Improve relative to the group-of-64 INT5 run if finer scales matter more than the added metadata cost.
+- expected effect on artifact bytes: Increase relative to the group-of-64 INT5 run because of extra scale metadata, but remain far below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91190363`, `artifact_bytes=7846539`, `train_peak_rss_bytes=1533853696`, `time=16:37.15 total`.
+- short conclusion: Discard. Reducing the group size from 64 to 32 did not improve quality and slightly increased artifact bytes, so `group64` remains the better operating point for this architecture-agnostic INT5 method.

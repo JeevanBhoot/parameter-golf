@@ -1,0 +1,8 @@
+- hypothesis: A general policy of quantizing the whole model to INT5 while keeping the tied embedding/output head in fp16 may push artifact size lower than the successful INT6 variant without collapsing quality.
+- exact change made: Use signed INT5 RTN for all large floating-point tensors, stored in `int8` containers with the same zlib artifact format, and keep `tok_emb.weight` in fp16 passthrough because it is also the tied output head.
+- why this is in scope: This is architecture-agnostic Tier 1 compression. It changes the global quantization bitwidth and uses only a structural exception that transfers across tied-embedding language models.
+- expected effect on val_bpb: Likely worse than the INT6 + tied-head run, but hopefully still reasonable if the tied head is the dominant high-precision requirement.
+- expected effect on artifact bytes: Improve relative to the INT6 + tied-head run and materially improve relative to the quick baseline.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.92848979`, `artifact_bytes=7645710`, `train_peak_rss_bytes=1534115840`, `time=17:16.21 total`.
+- short conclusion: Keep. This is the strongest architecture-agnostic byte reduction tested so far, cutting the artifact to about 7.65 MB while staying within the same train memory envelope, but the quality drop is large enough that it looks more like a reinvestment candidate than a direct submission path.

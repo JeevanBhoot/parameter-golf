@@ -1,0 +1,8 @@
+- hypothesis: Combining the general MSE clip-search quantizer with the strongest single fp16 keep-set, `blocks.8.mlp.proj.weight`, may outperform either idea alone while remaining comfortably under the artifact cap.
+- exact change made: Start from the per-row/per-tensor MSE clip-search int8 quantizer, and additionally keep `blocks.8.mlp.proj.weight` in fp16 passthrough. All other tensors follow the MSE clip-search path.
+- why this is in scope: This is a quantization-only mixed-precision follow-up that adds one targeted outlier-weight exception to a promising PTQ baseline.
+- expected effect on val_bpb: Improve relative to the pure MSE clip-search run and potentially compete with the best current quick-track result.
+- expected effect on artifact bytes: Increase relative to pure MSE clip-search, but remain below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90395442`, `artifact_bytes=13768781`, `train_peak_rss_bytes=1533411328`, `time=16:33.39 total`.
+- short conclusion: Discard. This combination does improve on the pure MSE clip-search run, but it is clearly dominated by keeping `blocks.8.mlp.proj.weight` in fp16 on its own, so the added clip-search complexity did not produce useful synergy at roughly the same artifact size.

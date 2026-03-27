@@ -1,0 +1,8 @@
+- hypothesis: Extending the successful MSE clip-search idea from INT8 down to INT6 may recover some of the quality lost by pure INT6 RTN while preserving nearly the same byte savings.
+- exact change made: Replace the fixed INT6 RTN clipping rule with the same small per-row or per-tensor clip-quantile search used in the INT8 MSE clip-search run, but keep the INT6 signed range and int8-on-disk storage format unchanged.
+- why this is in scope: This is a pure Tier 1 quantization-only ablation on clip selection for an already-promising low-bit scheme.
+- expected effect on val_bpb: Improve relative to the pure INT6 RTN run, ideally narrowing the gap to the stronger mixed-precision runs.
+- expected effect on artifact bytes: Stay very close to the pure INT6 RTN artifact size because the stored tensor formats are unchanged.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91603788`, `artifact_bytes=9469098`, `train_peak_rss_bytes=1535918080`, `time=16:38.48 total`.
+- short conclusion: Discard. The INT6 clip-search variant saved a tiny amount of extra artifact space versus pure INT6 RTN, but the quality drop was materially worse, so clip-selection MSE on weights alone is not helping in the low-bit regime here.
