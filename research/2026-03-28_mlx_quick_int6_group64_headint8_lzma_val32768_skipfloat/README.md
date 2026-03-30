@@ -1,0 +1,8 @@
+- hypothesis: The existing `INT6 + group64 + INT8 head` artifact should benefit materially from `lzma` compression, producing a stronger mid-byte point than the zlib version while keeping the underlying quantization quality unchanged.
+- exact change made: Keep the same `INT6 + group64 + INT8 head` quantization scheme, but compress the serialized quantized object with `lzma` instead of `zlib` before the exact roundtrip evaluation.
+- why this is in scope: This is a pure serialization/compression change on top of an architecture-agnostic quantization method. The quantized tensors and dequantization math stay the same.
+- expected effect on val_bpb: Stay effectively unchanged relative to the zlib `INT6 + group64 + INT8 head` reference, because only the codec changes.
+- expected effect on artifact bytes: Drop materially below the zlib artifact, based on offline recompression of the existing raw pickle.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90446697`, `artifact_bytes=8911671`, `train_peak_rss_bytes=1535803392`, `time=16:57.37 total`.
+- short conclusion: Keep. With a normal `1322` stop step, `lzma` turned the earlier `INT6 + group64 + INT8 head` point into a much stronger tradeoff: the artifact fell to about 8.91 MB and the exact `val_bpb` improved to 1.90446697, making this one of the cleanest low-byte/high-quality results so far.

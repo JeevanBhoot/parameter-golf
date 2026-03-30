@@ -1,0 +1,8 @@
+- hypothesis: The earlier `INT6 + group64 + fp16 tied head + lzma` run was likely degraded by its unusually low `1246` stop step. A cleaner rerun at the normal quick-track cadence should give a more trustworthy quality reading for this otherwise-promising codec point.
+- exact change made: Re-run the same `INT6 + group64 + fp16 tied head` quantization scheme with `lzma` serialization, using the unchanged quick-track protocol, to get a cleaner measurement of the existing codec idea.
+- why this is in scope: This is a reproducibility rerun of an architecture-agnostic quantization/compression method whose earlier result was materially confounded by lower training progress.
+- expected effect on val_bpb: Improve relative to the earlier `lzma` attempt if the stop step returns closer to the `1321`-step zlib reference.
+- expected effect on artifact bytes: Stay near the previous `lzma` artifact size, well below the zlib `INT6 + group64 + fp16 tied head` artifact.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90404065`, `artifact_bytes=9136360`, `train_peak_rss_bytes=1535508480`, `time=16:47.76 total`.
+- short conclusion: Keep. This clean rerun largely removed the earlier cadence confound: with a normal `1314` stop step, `lzma` preserved almost all of the strong `INT6 + group64 + fp16 tied head` quality while cutting the artifact to about 9.14 MB, making it a reliable frontier point.

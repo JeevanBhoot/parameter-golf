@@ -1,0 +1,8 @@
+- hypothesis: The `INT5 + group64 + fp16 tied head` variant may still be paying more scale overhead than necessary. Increasing the group size to `128` could save bytes while preserving enough of the grouped-scale quality gain to stay competitive.
+- exact change made: Quantize large floating-point tensors to signed INT5 using group-of-128 column scales for 2D weights, keep per-tensor scales for non-matrices, and keep `tok_emb.weight` in fp16 because it is also the tied output head.
+- why this is in scope: This is an architecture-agnostic low-bit compression method. It changes only the per-group scale granularity, which transfers cleanly across model sizes and layer counts.
+- expected effect on val_bpb: Degrade somewhat relative to `group64`, but ideally remain meaningfully better than plain INT5+tied-head.
+- expected effect on artifact bytes: Drop relative to `group64` because fewer scales need to be stored for each large matrix.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90816833`, `artifact_bytes=7850498`, `train_peak_rss_bytes=1535606784`, `time=16:34.39 total`.
+- short conclusion: Discard. Increasing the group size from `64` to `128` slightly worsened quality and did not even reduce the compressed artifact size, so `group64` remains the stronger and cleaner INT5 grouped baseline.

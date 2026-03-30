@@ -1,0 +1,8 @@
+- hypothesis: The current `INT5 + group64 + INT8 head` raw pickle may compress better with `lzma` than with `zlib`. Offline recompression on the existing artifact suggests `lzma` can save roughly 0.6 MB without changing the quantized tensors themselves.
+- exact change made: Keep the same `INT5 + group64 + INT8 head` quantization scheme, but compress the serialized quantized object with `lzma` instead of `zlib` before the exact roundtrip evaluation.
+- why this is in scope: This is a pure serialization/compression change on top of an architecture-agnostic quantization method. The quantized weights and dequantization math are unchanged.
+- expected effect on val_bpb: Stay effectively unchanged because the quantized values themselves are unchanged.
+- expected effect on artifact bytes: Drop materially relative to the current zlib-compressed `INT5 + group64 + INT8 head` artifact.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91239764`, `artifact_bytes=6955121`, `train_peak_rss_bytes=1535016960`, `time=16:30.77 total`.
+- short conclusion: Maybe. `lzma` delivered the expected artifact-size win, cutting the `INT5 + group64 + INT8 head` artifact to about 6.96 MB with a normal stop step, but this retrain's exact `val_bpb` lagged the zlib reference even though the quantization math was unchanged, so codec gains remain real but quality should still be interpreted as rerun-noisy rather than causal.

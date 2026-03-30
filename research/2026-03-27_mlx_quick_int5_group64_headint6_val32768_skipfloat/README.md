@@ -4,5 +4,5 @@
 - expected effect on val_bpb: Land between the fp16-head and INT8-head versions, ideally preserving most of the fp16-head quality.
 - expected effect on artifact bytes: Improve relative to the fp16-head version while likely sitting above the INT8-head version.
 - train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
-- final result: Pending.
-- short conclusion: Pending execution.
+- final result: `val_bpb=1.91650882`, `artifact_bytes=7401522`, `train_peak_rss_bytes=1535754240`, `time=16:36.26 total`.
+- short conclusion: Discard. Giving the tied head INT6 was much worse than giving it INT8, while only saving a small number of bytes, so this is not a useful operating point for the mixed-bit policy.

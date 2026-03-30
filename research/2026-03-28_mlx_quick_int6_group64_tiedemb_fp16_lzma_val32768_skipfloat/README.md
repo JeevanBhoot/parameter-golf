@@ -1,0 +1,8 @@
+- hypothesis: The current `INT6 + group64 + fp16 tied head` raw pickle may compress better with `lzma` than with `zlib`. Offline recompression on the existing frontier artifact suggests `lzma` can save close to 0.9 MB without changing the quantized tensors themselves.
+- exact change made: Keep the same `INT6 + group64 + fp16 tied head` quantization scheme, but compress the serialized quantized object with `lzma` instead of `zlib` before the exact roundtrip evaluation.
+- why this is in scope: This is a pure serialization/compression change on top of an architecture-agnostic quantization method. The quantized weights and dequantization math are unchanged.
+- expected effect on val_bpb: Stay effectively unchanged because the quantized values themselves are unchanged.
+- expected effect on artifact bytes: Drop materially relative to the current zlib-compressed `INT6 + group64 + fp16 tied head` artifact.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91490181`, `artifact_bytes=8941844`, `train_peak_rss_bytes=1534902272`, `time=16:54.78 total`.
+- short conclusion: Maybe. The codec swap delivered the expected byte win, shrinking the artifact from about `10.05 MB` to `8.94 MB`, but this run also stopped materially earlier than the zlib reference (`1246` vs `1321` steps), so the worse exact `val_bpb` is confounded. This still looks like a promising serialization direction, but not a clean apples-to-apples quality comparison.

@@ -1,0 +1,142 @@
+{
+  "buffer_seconds": 60,
+  "experiments": [
+    {
+      "run_tag": "2026-03-29_mlx_quick_int6_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int6_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Head-only AWQ on the INT6 group-of-64 body with INT8 tied head and lzma; only the tied embedding/output head receives activation-aware scaling, calibrated on 128 deterministic train-prefix sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int5_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int5_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Head-only AWQ on the INT5 group-of-64 body with INT8 tied head and lzma; only the tied embedding/output head receives activation-aware scaling, calibrated on 128 deterministic train-prefix sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Plain INT4 group-of-64 quantization with fp16 tied head and lzma serialization for a clean low-bit codec baseline",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "AWQ-style activation-aware column scaling on the INT4 group-of-64 body with fp16 tied head and lzma; 128 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "0",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int4_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "AWQ-style activation-aware column scaling on the INT4 group-of-64 body with fp16 tied head and lzma; 256 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "0",
+        "AWQ_CALIBRATION_SEQS": "256",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int4_group64_headint8_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int4_group64_headint8_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Plain INT4 group-of-64 quantization with an INT8 tied head and lzma serialization for a clean low-bit head-quantized baseline",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-29_mlx_quick_int4_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-29_mlx_quick_int4_group64_headint8_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Head-only AWQ on the INT4 group-of-64 body with INT8 tied head and lzma; only the tied embedding/output head receives activation-aware scaling, calibrated on 128 deterministic train-prefix sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+- hypothesis: The current `INT6 + group64 + fp16 tied head` run is likely wasting bytes by storing quantized INT6 values in `int8` arrays. Packing those values into true 6-bit storage should lower artifact size materially while preserving the same dequantized weights and therefore essentially the same `val_bpb`.
+- exact change made: Keep the same `INT6 + group64 + fp16 tied head` quantization scheme, but serialize all quantized INT6 tensors using lossless 6-bit packing before pickle+zlib instead of storing them as raw `int8` arrays.
+- why this is in scope: This is a pure serialization/compression improvement on top of an architecture-agnostic quantization method. It uses the same role-based tied-head exception and grouped scales, but stores the quantized values more efficiently.
+- expected effect on val_bpb: Stay effectively unchanged because the quantized values themselves are not changed, only their on-disk representation.
+- expected effect on artifact bytes: Drop relative to the current `INT6 + group64 + fp16 tied head` artifact because the large INT6 tensors no longer spend 8 bits per stored value.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: pending
+- short conclusion: pending

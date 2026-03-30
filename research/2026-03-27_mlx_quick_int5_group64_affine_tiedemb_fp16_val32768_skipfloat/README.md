@@ -1,0 +1,8 @@
+- hypothesis: The current best architecture-agnostic low-byte method may still be wasting levels by forcing zero-centered quantization; per-group affine quantization could recover quality at the same `INT5 + group64 + fp16 tied head` budget.
+- exact change made: Replace the symmetric group-of-64 INT5 quantizer for 2D tensors with an affine per-group quantizer that stores a group offset and scale, while keeping the tied embedding/output head in fp16 and leaving the rest of the experiment unchanged.
+- why this is in scope: This is a general quantization-algorithm upgrade, not a tensor-specific exception. Affine group quantization is portable across architectures, layer counts, and model sizes.
+- expected effect on val_bpb: Improve relative to the symmetric `INT5 + group64 + fp16 tied head` run if non-zero-centered groups are a meaningful source of error.
+- expected effect on artifact bytes: Increase somewhat because each group now stores an offset as well as a scale, but remain well below the 16 MB cap.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90382111`, `artifact_bytes=12275926`, `train_peak_rss_bytes=1535688704`, `time=16:32.78 total`.
+- short conclusion: Discard. The affine group quantizer recovered much better quality than symmetric INT5, but it gave up too much compression to get there, ending up slightly worse than the stronger `INT6 + group64 + fp16 head` run at a materially larger artifact size.

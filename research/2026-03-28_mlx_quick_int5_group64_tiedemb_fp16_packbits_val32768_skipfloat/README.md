@@ -1,0 +1,8 @@
+- hypothesis: The current `INT5 + group64 + fp16 tied head` run is likely wasting bytes by storing quantized INT5 values in `int8` arrays. Packing those values into true 5-bit storage should reduce artifact size materially while keeping the exact same dequantized weights and therefore essentially the same `val_bpb`.
+- exact change made: Keep the same `INT5 + group64 + fp16 tied head` quantization scheme, but serialize all quantized INT5 tensors using lossless 5-bit packing before pickle+zlib instead of storing them as raw `int8` arrays.
+- why this is in scope: This is a pure serialization/compression improvement on top of an architecture-agnostic quantization method. It does not depend on layer identities or model-specific keep-sets.
+- expected effect on val_bpb: Stay effectively unchanged because the quantized values themselves are not changed, only their on-disk representation.
+- expected effect on artifact bytes: Drop meaningfully relative to the current `INT5 + group64 + fp16 tied head` artifact because the large INT5 tensors no longer spend 8 bits per stored value.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.91937725`, `artifact_bytes=8586009`, `train_peak_rss_bytes=1535098880`, `time=16:44.11 total`.
+- short conclusion: Discard. Under pickle+zlib, lossless 5-bit packing made the compressed artifact larger, not smaller. This run also stopped materially earlier than the reference `INT5 + group64 + fp16 tied head` baseline (`1256` vs `1320` steps), so the worse quality is confounded, but the byte result alone is enough to rule this version out.

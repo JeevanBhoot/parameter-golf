@@ -1,0 +1,8 @@
+- hypothesis: INT6 with per-row group scales is already strong; quantizing the tied embedding/output head at INT8 may recover some of the bytes spent on the fp16 head while preserving most of the quality.
+- exact change made: Quantize large floating-point tensors to signed INT6 using group-of-64 column scales for 2D weights, keep per-tensor scales for non-matrices, and quantize `tok_emb.weight` with the same scheme but at INT8 dynamic range instead of keeping it in fp16.
+- why this is in scope: This is an architecture-agnostic quantization and compression method. It uses only role-based handling of the tied embedding/output head and a standard grouped low-bit scheme that transfers across model sizes and layer counts.
+- expected effect on val_bpb: Stay close to the `INT6 + group64 + fp16 tied head` result while giving back some bytes.
+- expected effect on artifact bytes: Reduce artifact size relative to the fp16-head variant while remaining comfortably below the quick baseline artifact size.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90862195`, `artifact_bytes=9688622`, `train_peak_rss_bytes=1536196608`, `time=16:37.70 total`.
+- short conclusion: Discard. Quantizing the tied head down to INT8 recovered about 0.36 MB versus the fp16-head INT6 grouped run, but the quality drop erased the advantage and leaves this point dominated by the stronger `INT5 + group64 + fp16 tied head` result.

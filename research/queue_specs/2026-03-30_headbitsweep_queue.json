@@ -1,0 +1,157 @@
+{
+  "buffer_seconds": 60,
+  "experiments": [
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_headint7_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_headint7_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT6 group-of-64 body with an INT7 tied head and lzma serialization; plain grouped quantization without AWQ",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "63",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_headint7_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_headint7_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT6 group-of-64 body with an INT7 tied head and lzma serialization; head-only AWQ on the tied embedding/output head with 128 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "63",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_headint6_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_headint6_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT6 group-of-64 body with an INT6 tied head and lzma serialization; plain grouped quantization without AWQ",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "31",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_headint6_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_headint6_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT6 group-of-64 body with an INT6 tied head and lzma serialization; head-only AWQ on the tied embedding/output head with 128 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "31",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint7_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint7_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT5 group-of-64 body with an INT7 tied head and lzma serialization; plain grouped quantization without AWQ",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "63",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint7_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint7_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT5 group-of-64 body with an INT7 tied head and lzma serialization; head-only AWQ on the tied embedding/output head with 128 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "63",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint6_lzma_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint6_lzma_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT5 group-of-64 body with an INT6 tied head and lzma serialization; plain grouped quantization without AWQ",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "31",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint6_lzma_awqheadonly_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint6_lzma_awqheadonly_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "INT5 group-of-64 body with an INT6 tied head and lzma serialization; head-only AWQ on the tied embedding/output head with 128 deterministic train-prefix calibration sequences",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "31",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "1",
+        "AWQ_SCALE_TIED_HEAD": "1",
+        "AWQ_INCLUDE_NAME_PATTERNS": "tok_emb.weight",
+        "AWQ_CALIBRATION_SEQS": "128",
+        "AWQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "AWQ_ALPHA_GRID": "0.0,0.25,0.5,0.75,1.0",
+        "AWQ_MAX_SCALE": "8.0"
+      }
+    }
+  ]
+}

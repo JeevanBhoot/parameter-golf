@@ -1,0 +1,8 @@
+- hypothesis: The strongest current low-byte method is `INT5 + group64 + fp16 tied head`, but fixed RTN clipping may still be suboptimal. A tiny deterministic calibration pass that weights quantization error by observed input activation energy could preserve more quality without materially changing bytes.
+- exact change made: Keep the same `INT5 + group64 + fp16 tied head` structure, but collect per-input activation second moments for each `CastedLinear` on a small deterministic train-prefix calibration set and use those statistics to choose clip levels by activation-weighted reconstruction error instead of a fixed RTN clip percentile.
+- why this is in scope: This is an architecture-agnostic calibration-based PTQ method. It applies the same activation-aware rule to every large matrix and keeps the same structural tied-head exception as the current best grouped INT5 baseline.
+- expected effect on val_bpb: Improve relative to the fixed-clip `INT5 + group64 + fp16 tied head` baseline if activation-aware clip selection better preserves important directions.
+- expected effect on artifact bytes: Stay close to the existing grouped INT5 artifact size because the serialized format is almost unchanged aside from any small metadata effects.
+- train memory budget rule: Keep `train_peak_rss_bytes` at or near the quick baseline.
+- final result: `val_bpb=1.90983833`, `artifact_bytes=7877369`, `train_peak_rss_bytes=1535557632`, `time=16:35.98 total`.
+- short conclusion: Discard. This simple activation-diagonal clip-search calibration made the grouped INT5 result worse and slightly increased artifact size, so the idea did not transfer cleanly beyond the fixed-clip grouped baseline.

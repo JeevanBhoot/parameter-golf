@@ -1,0 +1,39 @@
+[queue] 1/8 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat val_bpb=1.90248080 artifact_bytes=9792607 time=16:49.27 rss=1536770048 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 2/8 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int6_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat val_bpb=1.90644446 artifact_bytes=9822335 time=16:52.66 rss=1535459328 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 3/8 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awq_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int6_group64_headint8_lzma_awq_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awq_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awq_calib128_val32768_skipfloat val_bpb=1.90613047 artifact_bytes=9536075 time=16:41.15 rss=1536524288 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 4/8 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int6_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int6_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat val_bpb=1.89650511 artifact_bytes=9525023 time=16:44.51 rss=1536098304 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 5/8 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib128_val32768_skipfloat val_bpb=1.90306011 artifact_bytes=7871147 time=16:49.92 rss=1535705088 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 6/8 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int5_group64_tiedemb_fp16_lzma_awq_calib256_val32768_skipfloat val_bpb=1.90463478 artifact_bytes=7848875 time=16:55.89 rss=1536638976 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 7/8 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awq_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int5_group64_headint8_lzma_awq_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awq_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awq_calib128_val32768_skipfloat val_bpb=1.91075957 artifact_bytes=7547091 time=16:55.77 rss=1536294912 status=maybe
+[queue] sleeping 60.0s before next run
+[queue] 8/8 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-28_mlx_quick_int5_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat: 0
+[queue] logged 2026-03-28_mlx_quick_int5_group64_headint8_lzma_awqhead_calib128_val32768_skipfloat val_bpb=1.91163164 artifact_bytes=7544123 time=16:56.82 rss=1536786432 status=maybe
