@@ -1,0 +1,3426 @@
+#!/usr/bin/env python3
+"""
+The `train_gpt.py` and `train_gpt_mlx.py` scripts are intended as good launching-off points for new participants, not SOTA configs. We'll accept PRs that tune, improve, or simplify these scripts without significantly increasing complexity, but competitive submissions should stay in the `/records` folder.
+
+Hard stop: To keep readable for newcomers, let's make sure `train_gpt.py` and `train_gpt_mlx.py` never are longer than 1500 lines.
+"""
+from __future__ import annotations
+
+import glob
+import hashlib
+import json
+import lzma
+import math
+import os
+import pickle
+import resource
+import sys
+import time
+import uuid
+import zlib
+from collections.abc import Callable
+from pathlib import Path
+from statistics import NormalDist
+
+import numpy as np
+import sentencepiece as spm
+
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
+from mlx.utils import tree_flatten, tree_unflatten
+
+# ==============================================================================
+# SHARD FORMAT + COMPUTE DTYPE
+# ==============================================================================
+
+COMPUTE_DTYPE = mx.bfloat16
+
+# ==============================================================================
+# HYPERPARAMETERS
+# ==============================================================================
+# Default Simple Baseline run:
+# - 9 transformer blocks at width 512
+# - 8 attention heads with 4 KV heads (GQA) and 2x MLP expansion
+# - vocab size 1024, sequence length 1024, tied embeddings
+# - 524,288 train tokens per step for 20,000 iterations with a ~10 minute cap
+class Hyperparameters:
+    # Data / tokenizer.
+    data_path: str = os.environ.get("DATA_PATH", "./data/datasets/fineweb10B_sp1024")
+    tokenizer_path: str = os.environ.get("TOKENIZER_PATH", "./data/tokenizers/fineweb_1024_bpe.model")
+    run_id: str = os.environ.get("RUN_ID", str(uuid.uuid4()))
+    seed: int = int(os.environ.get("SEED", 1337))
+
+    # Training loop. These defaults now mirror train_gpt.py on a single process.
+    iterations: int = int(os.environ.get("ITERATIONS", 20_000))
+    val_loss_every: int = int(os.environ.get("VAL_LOSS_EVERY", 0))
+    # Validation defaults to the full fineweb_val split. For faster local
+    # iteration, VAL_SUBSET_SEQS can pin a deterministic prefix.
+    val_batch_size: int = int(os.environ.get("VAL_BATCH_SIZE", 8_192))
+    val_subset_seqs: int = int(os.environ.get("VAL_SUBSET_SEQS", 0))
+    skip_final_float_val: bool = bool(int(os.environ.get("SKIP_FINAL_FLOAT_VAL", "0")))
+    train_log_every: int = int(os.environ.get("TRAIN_LOG_EVERY", 200))
+    train_batch_tokens: int = int(os.environ.get("TRAIN_BATCH_TOKENS", 8_192))
+    grad_accum_steps: int = int(os.environ.get("GRAD_ACCUM_STEPS", 8))
+    train_seq_len: int = int(os.environ.get("TRAIN_SEQ_LEN", os.environ.get("TRAIN_MAX_SEQ_LEN", 1024)))
+    # Chunk each logical MLX microbatch into smaller sub-batches to reduce peak
+    # memory pressure without changing the effective optimizer batch.
+    mlx_max_microbatch_tokens: int = int(os.environ.get("MLX_MAX_MICROBATCH_TOKENS", 8_192))
+    warmup_steps: int = int(os.environ.get("WARMUP_STEPS", 20))
+    warmdown_iters: int = int(os.environ.get("WARMDOWN_ITERS", 1200))
+    max_wallclock_seconds: float = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
+
+    # Model (defaults match the current baseline setup).
+    vocab_size: int = int(os.environ.get("VOCAB_SIZE", 1024))
+    num_layers: int = int(os.environ.get("NUM_LAYERS", 9))
+    model_dim: int = int(os.environ.get("MODEL_DIM", 512))
+    num_heads: int = int(os.environ.get("NUM_HEADS", 8))
+    num_kv_heads: int = int(os.environ.get("NUM_KV_HEADS", 4))
+    mlp_mult: int = int(os.environ.get("MLP_MULT", 2))
+    tie_embeddings: bool = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
+    tied_embed_init_std: float = float(os.environ.get("TIED_EMBED_INIT_STD", 0.005))
+    logit_chunk_tokens: int = int(os.environ.get("LOGIT_CHUNK_TOKENS", 0))
+    logit_softcap: float = float(os.environ.get("LOGIT_SOFTCAP", 30.0))
+    rope_base: float = float(os.environ.get("ROPE_BASE", 10000.0))
+    qk_gain_init: float = float(os.environ.get("QK_GAIN_INIT", 1.5))
+
+    # Optimizer. We keep the same per-group defaults as train_gpt.py.
+    beta1: float = float(os.environ.get("BETA1", 0.9))
+    beta2: float = float(os.environ.get("BETA2", 0.95))
+    adam_eps: float = float(os.environ.get("ADAM_EPS", 1e-8))
+    tied_embed_lr: float = float(os.environ.get("TIED_EMBED_LR", 0.05))
+    matrix_lr: float = float(os.environ.get("MATRIX_LR", 0.04))
+    scalar_lr: float = float(os.environ.get("SCALAR_LR", 0.04))
+    muon_momentum: float = float(os.environ.get("MUON_MOMENTUM", 0.95))
+    muon_backend_steps: int = int(os.environ.get("MUON_BACKEND_STEPS", 5))
+    muon_momentum_warmup_start: float = float(os.environ.get("MUON_MOMENTUM_WARMUP_START", 0.85))
+    muon_momentum_warmup_steps: int = int(os.environ.get("MUON_MOMENTUM_WARMUP_STEPS", 500))
+    grad_clip_norm: float = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
+
+    out_dir: str = os.environ.get("OUT_DIR", "logs")
+
+    @property
+    def train_files(self) -> str:
+        return f"{self.data_path}/fineweb_train_*.bin"
+
+    @property
+    def val_files(self) -> str:
+        return f"{self.data_path}/fineweb_val_*.bin"
+
+    @property
+    def microbatch_tokens(self) -> int:
+        return self.train_batch_tokens // self.grad_accum_steps
+
+    def lr_mul(self, step: int, elapsed_ms: float) -> float:
+        if self.warmdown_iters <= 0:
+            return 1.0
+        if self.max_wallclock_seconds <= 0:
+            warmdown_start = max(self.iterations - self.warmdown_iters, 0)
+            return max((self.iterations - step) / max(self.warmdown_iters, 1), 0.0) if warmdown_start <= step < self.iterations else 1.0
+        step_ms = elapsed_ms / max(step, 1)
+        warmdown_ms = self.warmdown_iters * step_ms
+        remaining_ms = max(1000.0 * self.max_wallclock_seconds - elapsed_ms, 0.0)
+        return remaining_ms / max(warmdown_ms, 1e-9) if remaining_ms <= warmdown_ms else 1.0
+
+
+CONTROL_TENSOR_NAME_PATTERNS = tuple(
+    pattern
+    for pattern in os.environ.get(
+        "CONTROL_TENSOR_NAME_PATTERNS",
+        "attn_scale,attn_scales,mlp_scale,mlp_scales,resid_mix,resid_mixes,q_gain,skip_weight,skip_weights",
+    ).split(",")
+    if pattern
+)
+INT8_KEEP_FLOAT_FP32_NAME_PATTERNS = tuple(
+    pattern
+    for pattern in os.environ.get(
+        "INT8_KEEP_FLOAT_FP32_NAME_PATTERNS",
+        ",".join(CONTROL_TENSOR_NAME_PATTERNS),
+    ).split(",")
+    if pattern
+)
+
+
+def token_chunks(total_tokens: int, seq_len: int, max_chunk_tokens: int) -> list[int]:
+    usable_total = (total_tokens // seq_len) * seq_len
+    if usable_total <= 0:
+        raise ValueError(f"token budget too small for seq_len={seq_len}")
+    usable_chunk = max((max_chunk_tokens // seq_len) * seq_len, seq_len)
+    chunks: list[int] = []
+    remaining = usable_total
+    while remaining > 0:
+        chunk = min(remaining, usable_chunk)
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
+
+
+def accumulate_flat_grads(
+    accum: dict[str, mx.array] | None,
+    grads_tree: dict,
+    scale: float,
+) -> dict[str, mx.array]:
+    flat = dict(tree_flatten(grads_tree))
+    if accum is None:
+        return {k: g * scale for k, g in flat.items()}
+    for k, g in flat.items():
+        accum[k] = accum[k] + g * scale
+    return accum
+
+
+def peak_rss_bytes() -> int:
+    rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    # macOS reports bytes; Linux typically reports KiB.
+    return rss if sys.platform == "darwin" else rss * 1024
+
+
+def format_bytes(num_bytes: int) -> str:
+    value = float(num_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or unit == "TiB":
+            return f"{value:.2f}{unit}"
+        value /= 1024.0
+    return f"{num_bytes}B"
+
+
+# ==============================================================================
+# MATH HELPERS
+# ==============================================================================
+
+def rms_norm(x: mx.array, eps: float = 1e-6) -> mx.array:
+    return (x * mx.rsqrt(mx.mean(x * x, axis=-1, keepdims=True) + eps)).astype(x.dtype)
+
+
+def zeropower_newtonschulz5(g: mx.array, steps: int, eps: float = 1e-7) -> mx.array:
+    # Orthogonalize a 2D update matrix with a fast Newton-Schulz iteration.
+    # Muon uses this to normalize matrix-shaped gradients before applying them.
+    # Background on Muon: https://kellerjordan.github.io/posts/muon/
+    a, b, c = 3.4445, -4.7750, 2.0315
+    x = g.astype(mx.float32)
+    x = x / (mx.sqrt(mx.sum(x * x)) + eps)
+    transposed = x.shape[0] > x.shape[1]
+    if transposed:
+        x = x.T
+    for _ in range(steps):
+        a_mat = x @ x.T
+        b_mat = b * a_mat + c * (a_mat @ a_mat)
+        x = a * x + b_mat @ x
+    if transposed:
+        x = x.T
+    return x.astype(g.dtype)
+
+
+def load_data_shard(path: Path) -> np.ndarray:
+    header_bytes = 256 * np.dtype("<i4").itemsize
+    token_bytes = np.dtype("<u2").itemsize
+    header = np.fromfile(path, dtype="<i4", count=256)
+    if header.size != 256 or int(header[0]) != 20240520 or int(header[1]) != 1:
+        raise ValueError(f"Unexpected shard header for {path}")
+    num_tokens = int(header[2])
+    if path.stat().st_size != header_bytes + num_tokens * token_bytes:
+        raise ValueError(f"Shard size mismatch for {path}")
+    tokens = np.fromfile(path, dtype="<u2", count=num_tokens, offset=header_bytes)
+    if tokens.size != num_tokens:
+        raise ValueError(f"Short read for {path}")
+    return tokens.astype(np.int32, copy=False)
+
+
+# ==============================================================================
+# TOKEN STREAMING / BATCHING
+# ==============================================================================
+
+
+class TokenStream:
+    def __init__(
+        self,
+        pattern: str,
+        log_fn: Callable[[str], None] | None = None,
+        dataset_name: str = "",
+    ):
+        self.files = [Path(p) for p in sorted(glob.glob(pattern))]
+        if not self.files:
+            raise FileNotFoundError(f"No files found for pattern: {pattern}")
+        self.epoch = 1
+        self.file_idx = 0
+        self.log_fn = log_fn
+        self.dataset_name = dataset_name
+        self.tokens = load_data_shard(self.files[0])
+        self.pos = 0
+
+    def next_file(self) -> None:
+        self.file_idx = (self.file_idx + 1) % len(self.files)
+        if self.file_idx == 0:
+            self.epoch += 1
+            if self.log_fn is not None:
+                self.log_fn(
+                    f"WARNING: starting epoch:{self.epoch} "
+                    f"dataset:{self.dataset_name} train_shards:{len(self.files)}"
+                )
+        self.tokens = load_data_shard(self.files[self.file_idx])
+        self.pos = 0
+
+    def take(self, n: int) -> np.ndarray:
+        chunks: list[np.ndarray] = []
+        left = n
+        while left > 0:
+            if self.pos >= self.tokens.size:
+                self.next_file()
+            k = min(left, int(self.tokens.size - self.pos))
+            chunks.append(self.tokens[self.pos : self.pos + k])
+            self.pos += k
+            left -= k
+        return chunks[0] if len(chunks) == 1 else np.concatenate(chunks, axis=0)
+
+
+class TokenLoader:
+    def __init__(
+        self,
+        pattern: str,
+        log_fn: Callable[[str], None] | None = None,
+        dataset_name: str = "",
+    ):
+        self.stream = TokenStream(pattern, log_fn=log_fn, dataset_name=dataset_name)
+
+    def next_batch(self, batch_tokens: int, seq_len: int) -> tuple[mx.array, mx.array]:
+        usable = (batch_tokens // seq_len) * seq_len
+        if usable <= 0:
+            raise ValueError(f"token budget too small for seq_len={seq_len}")
+        chunk = self.stream.take(usable + 1)
+        x = chunk[:-1].reshape(-1, seq_len)
+        y = chunk[1:].reshape(-1, seq_len)
+        return mx.array(x, dtype=mx.int32), mx.array(y, dtype=mx.int32)
+
+
+# ==============================================================================
+# MODEL BLOCKS
+# ==============================================================================
+
+_ACTIVE_ACTIVATION_COLLECTOR = None
+
+
+class ActivationAbsMeanCollector:
+    def __init__(self):
+        self.sum_abs: dict[str, np.ndarray] = {}
+        self.counts: dict[str, int] = {}
+
+    def observe(self, name: str, x: mx.array) -> None:
+        x_np = np.array(x.astype(mx.float32), dtype=np.float32, copy=False)
+        if x_np.ndim == 0:
+            return
+        flat = x_np.reshape(-1, x_np.shape[-1])
+        if flat.size == 0:
+            return
+        sum_abs = np.sum(np.abs(flat), axis=0, dtype=np.float64)
+        prev = self.sum_abs.get(name)
+        self.sum_abs[name] = sum_abs if prev is None else prev + sum_abs
+        self.counts[name] = self.counts.get(name, 0) + int(flat.shape[0])
+
+    def finalize(self) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        for name, sum_abs in self.sum_abs.items():
+            out[name] = np.ascontiguousarray(
+                (sum_abs / max(self.counts.get(name, 0), 1)).astype(np.float32, copy=False)
+            )
+        return out
+
+
+class ActivationSecondMomentCollector:
+    def __init__(self, group_size: int, max_rows_per_observe: int):
+        self.group_size = max(group_size, 1)
+        self.max_rows_per_observe = max_rows_per_observe
+        self.sum_xxt: dict[str, list[np.ndarray]] = {}
+        self.counts: dict[str, int] = {}
+
+    def observe(self, name: str, x: mx.array) -> None:
+        x_np = np.array(x.astype(mx.float32), dtype=np.float32, copy=False)
+        if x_np.ndim == 0:
+            return
+        flat = x_np.reshape(-1, x_np.shape[-1])
+        if flat.size == 0:
+            return
+        if self.max_rows_per_observe > 0 and flat.shape[0] > self.max_rows_per_observe:
+            stride = max(flat.shape[0] // self.max_rows_per_observe, 1)
+            flat = flat[::stride][: self.max_rows_per_observe]
+        flat = np.ascontiguousarray(flat, dtype=np.float32)
+        cols = int(flat.shape[1])
+        groups = self.sum_xxt.get(name)
+        if groups is None:
+            groups = []
+            for start in range(0, cols, self.group_size):
+                end = min(start + self.group_size, cols)
+                groups.append(np.zeros((end - start, end - start), dtype=np.float64))
+            self.sum_xxt[name] = groups
+        for group_idx, start in enumerate(range(0, cols, self.group_size)):
+            end = min(start + self.group_size, cols)
+            chunk = flat[:, start:end]
+            groups[group_idx] += chunk.T @ chunk
+        self.counts[name] = self.counts.get(name, 0) + int(flat.shape[0])
+
+    def finalize(self) -> dict[str, list[np.ndarray]]:
+        out: dict[str, list[np.ndarray]] = {}
+        for name, groups in self.sum_xxt.items():
+            denom = float(max(self.counts.get(name, 0), 1))
+            out[name] = [
+                np.ascontiguousarray((group / denom).astype(np.float32, copy=False))
+                for group in groups
+            ]
+        return out
+
+class CastedLinear(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, weight_name: str):
+        super().__init__()
+        self.weight_name = weight_name
+        self.weight = nn.Linear(in_dim, out_dim, bias=False).weight.astype(mx.float32)
+
+    def __call__(self, x: mx.array) -> mx.array:
+        if _ACTIVE_ACTIVATION_COLLECTOR is not None:
+            _ACTIVE_ACTIVATION_COLLECTOR.observe(self.weight_name, x)
+        return x @ self.weight.astype(x.dtype).T
+
+
+class RMSNormNoWeight(nn.Module):
+    # MLX module wrapper around the functional RMSNorm helper so it composes nicely in blocks.
+    def __call__(self, x: mx.array) -> mx.array:
+        return rms_norm(x)
+
+
+class CausalSelfAttention(nn.Module):
+    # - separate q/k/v projections
+    # - RMSNorm on q and k before attention
+    # - RoPE on q and k
+    # - causal masked SDPA
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        rope_base: float,
+        qk_gain_init: float,
+        prefix: str,
+    ):
+        super().__init__()
+        if dim % num_heads != 0:
+            raise ValueError("model_dim must be divisible by num_heads")
+        if num_heads % num_kv_heads != 0:
+            raise ValueError("num_heads must be divisible by num_kv_heads")
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = dim // num_heads
+        if self.head_dim % 2 != 0:
+            raise ValueError("head_dim must be even for RoPE")
+        kv_dim = self.num_kv_heads * self.head_dim
+        self.c_q = CastedLinear(dim, dim, f"{prefix}.c_q.weight")
+        self.c_k = CastedLinear(dim, kv_dim, f"{prefix}.c_k.weight")
+        self.c_v = CastedLinear(dim, kv_dim, f"{prefix}.c_v.weight")
+        self.proj = CastedLinear(dim, dim, f"{prefix}.proj.weight")
+        self.q_gain = mx.ones((num_heads,), dtype=mx.float32) * qk_gain_init
+        self.rope = nn.RoPE(self.head_dim, traditional=False, base=rope_base)
+        self.scale = self.head_dim ** -0.5
+
+    def __call__(self, x: mx.array) -> mx.array:
+        bsz, seqlen, dim = x.shape
+        q = self.c_q(x).reshape(bsz, seqlen, self.num_heads, self.head_dim).transpose(0, 2, 1, 3)
+        k = self.c_k(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
+        v = self.c_v(x).reshape(bsz, seqlen, self.num_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
+
+        q = self.rope(rms_norm(q).astype(COMPUTE_DTYPE))
+        k = self.rope(rms_norm(k).astype(COMPUTE_DTYPE))
+        q = q * self.q_gain.astype(q.dtype)[None, :, None, None]
+        y = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask="causal")
+        y = y.transpose(0, 2, 1, 3).reshape(bsz, seqlen, dim)
+        return self.proj(y)
+
+
+class MLP(nn.Module):
+    # Baseline MLP uses relu^2 instead of GELU/SiLU. It is cheap and works well in this setup.
+    def __init__(self, dim: int, mlp_mult: int, prefix: str):
+        super().__init__()
+        hidden = dim * mlp_mult
+        self.fc = CastedLinear(dim, hidden, f"{prefix}.fc.weight")
+        self.proj = CastedLinear(hidden, dim, f"{prefix}.proj.weight")
+
+    def __call__(self, x: mx.array) -> mx.array:
+        x = nn.relu(self.fc(x))
+        return self.proj(x * x)
+
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        block_idx: int,
+        dim: int,
+        num_heads: int,
+        num_kv_heads: int,
+        mlp_mult: int,
+        rope_base: float,
+        qk_gain_init: float,
+    ):
+        super().__init__()
+        self.attn_norm = RMSNormNoWeight()
+        self.mlp_norm = RMSNormNoWeight()
+        block_prefix = f"blocks.{block_idx}"
+        self.attn = CausalSelfAttention(
+            dim,
+            num_heads,
+            num_kv_heads,
+            rope_base,
+            qk_gain_init,
+            prefix=f"{block_prefix}.attn",
+        )
+        self.mlp = MLP(dim, mlp_mult, prefix=f"{block_prefix}.mlp")
+        self.attn_scale = mx.ones((dim,), dtype=mx.float32)
+        self.mlp_scale = mx.ones((dim,), dtype=mx.float32)
+        self.resid_mix = mx.array(np.stack((np.ones((dim,), dtype=np.float32), np.zeros((dim,), dtype=np.float32))))
+
+    def __call__(self, x: mx.array, x0: mx.array) -> mx.array:
+        mix = self.resid_mix.astype(x.dtype)
+        x = mix[0][None, None, :] * x + mix[1][None, None, :] * x0
+        attn_out = self.attn(self.attn_norm(x))
+        x = x + self.attn_scale.astype(x.dtype)[None, None, :] * attn_out
+        x = x + self.mlp_scale.astype(x.dtype)[None, None, :] * self.mlp(self.mlp_norm(x))
+        return x
+
+
+class GPT(nn.Module):
+    # - token embedding + RMSNorm
+    # - encoder half accumulates skip tensors
+    # - decoder half consumes reversed skips with learned skip_weights
+    # - tied embeddings for the LM head (the baseline default setup)
+    def __init__(self, vocab_size: int, num_layers: int, dim: int, num_heads: int, num_kv_heads: int, mlp_mult: int,
+                 logit_chunk_tokens: int, logit_softcap: float, rope_base: float, tied_embed_init_std: float,
+                 qk_gain_init: float):
+        super().__init__()
+        if logit_softcap <= 0.0:
+            raise ValueError(f"logit_softcap must be positive, got {logit_softcap}")
+        self.logit_chunk_tokens = logit_chunk_tokens
+        self.logit_softcap = logit_softcap
+
+        self.tok_emb = nn.Embedding(vocab_size, dim)
+        self.num_encoder_layers = num_layers // 2
+        self.num_decoder_layers = num_layers - self.num_encoder_layers
+        self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
+        self.skip_weights = mx.ones((self.num_skip_weights, dim), dtype=mx.float32)
+        self.blocks = [
+            Block(i, dim, num_heads, num_kv_heads, mlp_mult, rope_base, qk_gain_init)
+            for i in range(num_layers)
+        ]
+        self.final_norm = RMSNormNoWeight()
+
+        for b in self.blocks:
+            b.attn.proj.weight = mx.zeros_like(b.attn.proj.weight)
+            b.mlp.proj.weight = mx.zeros_like(b.mlp.proj.weight)
+        self.tok_emb.weight = (
+            mx.random.normal(self.tok_emb.weight.shape, dtype=mx.float32) * tied_embed_init_std
+        ).astype(COMPUTE_DTYPE)
+
+    def softcap(self, logits: mx.array) -> mx.array:
+        c = self.logit_softcap
+        return c * mx.tanh(logits / c)
+
+    def __call__(self, input_ids: mx.array) -> mx.array:
+        x = rms_norm(self.tok_emb(input_ids).astype(COMPUTE_DTYPE))
+        x0 = x
+        skips: list[mx.array] = []
+
+        for i in range(self.num_encoder_layers):
+            x = self.blocks[i](x, x0)
+            skips.append(x)
+        for i in range(self.num_decoder_layers):
+            # Odd layer counts have one more decoder block than encoder block. The baseline only
+            # applies a skip connection when one exists, then runs the remaining decoder block(s)
+            # without an added skip.
+            if skips:
+                x = x + self.skip_weights[i].astype(x.dtype)[None, None, :] * skips.pop()
+            x = self.blocks[self.num_encoder_layers + i](x, x0)
+        x = self.final_norm(x)
+        if _ACTIVE_ACTIVATION_COLLECTOR is not None and QUANTIZE_TIED_HEAD:
+            _ACTIVE_ACTIVATION_COLLECTOR.observe("tok_emb.weight", x)
+        return x
+
+    def loss(self, input_ids: mx.array, target_ids: mx.array) -> mx.array:
+        # Cross-entropy over flattened tokens. We keep optional logit chunking because it is a useful
+        # memory knob on Macs, but the common path is chunk_tokens=0 (single matmul + CE).
+        x = self(input_ids).reshape(-1, self.tok_emb.weight.shape[1])
+        y = target_ids.reshape(-1)
+        if self.logit_chunk_tokens <= 0 or x.shape[0] <= self.logit_chunk_tokens:
+            logits_proj = x @ self.tok_emb.weight.astype(x.dtype).T
+            logits = self.softcap(logits_proj)
+            return nn.losses.cross_entropy(logits.astype(mx.float32), y, reduction="mean")
+
+        loss_sum = mx.array(0.0, dtype=mx.float32)
+        n = int(x.shape[0])
+        for s in range(0, n, self.logit_chunk_tokens):
+            e = min(s + self.logit_chunk_tokens, n)
+            logits_proj = x[s:e] @ self.tok_emb.weight.astype(x.dtype).T
+            logits = self.softcap(logits_proj)
+            loss_sum = loss_sum + nn.losses.cross_entropy(logits.astype(mx.float32), y[s:e], reduction="sum")
+        return loss_sum / float(n)
+
+# ==============================================================================
+# OPTIMIZERS (MUON + ADAM SPLIT)
+# ==============================================================================
+class Muon:
+    # Muon applies SGD-momentum to matrix gradients, then orthogonalizes the result before the
+    # parameter update.
+    def __init__(self, keys: list[str], params: dict[str, mx.array], args: Hyperparameters):
+        self.keys = keys
+        self.args = args
+        self.buffers = {k: mx.zeros_like(params[k]) for k in keys}
+
+    def step(self, params: dict[str, mx.array], grads: dict[str, mx.array], step: int, lr_mul: float) -> dict[str, mx.array]:
+        if self.args.muon_momentum_warmup_steps:
+            t = min(step / self.args.muon_momentum_warmup_steps, 1.0)
+            momentum = (1.0 - t) * self.args.muon_momentum_warmup_start + t * self.args.muon_momentum
+        else:
+            momentum = self.args.muon_momentum
+        lr = self.args.matrix_lr * lr_mul
+        out: dict[str, mx.array] = {}
+        for k in self.keys:
+            p = params[k]
+            g = grads[k]
+            buf = momentum * self.buffers[k] + g
+            self.buffers[k] = buf
+            g_eff = g + momentum * buf
+            g_ortho = zeropower_newtonschulz5(g_eff, self.args.muon_backend_steps)
+            scale = math.sqrt(max(1.0, float(p.shape[0]) / float(p.shape[1])))
+            out[k] = p - lr * (g_ortho * scale).astype(p.dtype)
+        return out
+
+
+class SplitOptimizers:
+    # - embeddings: Adam with the tied-embedding LR
+    # - block matrices (2D): Muon
+    # - block scalars + skip weights: Adam
+    # This preserves the high-level optimization behavior even though MLX internals differ.
+    def __init__(self, model: GPT, args: Hyperparameters):
+        self.args = args
+        params = dict(tree_flatten(model.parameters()))
+        self.embed_key = "tok_emb.weight"
+        self.matrix_keys = [
+            k
+            for k, p in params.items()
+            if k.startswith("blocks.") and p.ndim == 2 and not any(pattern in k for pattern in CONTROL_TENSOR_NAME_PATTERNS)
+        ]
+        self.scalar_keys = [
+            k
+            for k, p in params.items()
+            if k == "skip_weights" or (k.startswith("blocks.") and (p.ndim < 2 or any(pattern in k for pattern in CONTROL_TENSOR_NAME_PATTERNS)))
+        ]
+
+        self.muon = Muon(self.matrix_keys, params, args)
+        self.adam_embed = optim.Adam(
+            learning_rate=args.tied_embed_lr,
+            betas=[args.beta1, args.beta2],
+            eps=args.adam_eps,
+            bias_correction=True,
+        )
+        self.adam_scalar = optim.Adam(
+            learning_rate=args.scalar_lr,
+            betas=[args.beta1, args.beta2],
+            eps=args.adam_eps,
+            bias_correction=True,
+        )
+
+    def step(self, model: GPT, grads_tree: dict, step: int, lr_mul: float) -> None:
+        params = dict(tree_flatten(model.parameters()))
+        grads = dict(tree_flatten(grads_tree))
+        updated = dict(params)
+
+        updated.update(self.muon.step(params, grads, step=step, lr_mul=lr_mul))
+
+        self.adam_embed.learning_rate = self.args.tied_embed_lr * lr_mul
+        updated.update(
+            self.adam_embed.apply_gradients(
+                {self.embed_key: grads[self.embed_key]},
+                {self.embed_key: params[self.embed_key]},
+            )
+        )
+
+        self.adam_scalar.learning_rate = self.args.scalar_lr * lr_mul
+        scalar_grads = {k: grads[k] for k in self.scalar_keys}
+        scalar_params = {k: params[k] for k in self.scalar_keys}
+        updated.update(self.adam_scalar.apply_gradients(scalar_grads, scalar_params))
+
+        model.update(tree_unflatten(list(updated.items())))
+
+# ==============================================================================
+# QUANTIZATION (INT8 + ZLIB)
+# ==============================================================================
+# - per-row int8 for 2D float tensors
+# - per-tensor int8 for other float tensors
+# - fp16 passthrough for small float tensors
+# - exact passthrough for non-floats
+
+MX_DTYPE_FROM_NAME = {
+    "float32": mx.float32,
+    "float16": mx.float16,
+    "bfloat16": mx.bfloat16,
+}
+
+INT8_KEEP_FLOAT_MAX_NUMEL = 65_536
+INT8_KEEP_FLOAT_STORE_DTYPE = np.float16
+INT8_PER_ROW_SCALE_DTYPE = np.float16
+INT8_CLIP_PERCENTILE = 99.99984
+INT8_CLIP_Q = INT8_CLIP_PERCENTILE / 100.0
+INT8_RTN_QMAX = int(os.environ.get("QMAX_BODY", "31"))
+INT8_HEAD_QMAX = int(os.environ.get("QMAX_HEAD", "127"))
+INT8_PER_ROW_GROUP_SIZE = int(os.environ.get("GROUP_SIZE", "64"))
+QUANTIZE_TIED_HEAD = bool(int(os.environ.get("QUANTIZE_TIED_HEAD", "0")))
+QUANT_METHOD = os.environ.get("QUANT_METHOD", "rtn").strip().lower()
+INPUT_ROTATION = os.environ.get("INPUT_ROTATION", "none").strip().lower()
+ROTATION_SEED = int(os.environ.get("ROTATION_SEED", "1337"))
+SCALAR_QUANTIZER = os.environ.get("SCALAR_QUANTIZER", "uniform").strip().lower()
+AWQ_ENABLED = bool(int(os.environ.get("AWQ_ENABLED", "1")))
+AWQ_ALPHA_GRID = tuple(
+    float(alpha)
+    for alpha in os.environ.get("AWQ_ALPHA_GRID", "0.0,0.25,0.5,0.75,1.0").split(",")
+    if alpha
+)
+AWQ_CALIBRATION_SEQS = int(os.environ.get("AWQ_CALIBRATION_SEQS", "128"))
+AWQ_CALIBRATION_BATCH_TOKENS = int(os.environ.get("AWQ_CALIBRATION_BATCH_TOKENS", "8192"))
+AWQ_SCALE_TIED_HEAD = bool(int(os.environ.get("AWQ_SCALE_TIED_HEAD", "0")))
+AWQ_INCLUDE_NAME_PATTERNS = tuple(
+    pattern
+    for pattern in os.environ.get("AWQ_INCLUDE_NAME_PATTERNS", "").split(",")
+    if pattern
+)
+AWQ_EXCLUDE_NAME_PATTERNS = tuple(
+    pattern
+    for pattern in os.environ.get("AWQ_EXCLUDE_NAME_PATTERNS", "").split(",")
+    if pattern
+)
+AWQ_SCALE_STORE_DTYPE = np.float16
+AWQ_MIN_ACT_SCALE = 1e-6
+AWQ_MAX_SCALE = float(os.environ.get("AWQ_MAX_SCALE", "8.0"))
+GPTQ_ENABLED = QUANT_METHOD == "gptq"
+GPTQ_CALIBRATION_SEQS = int(os.environ.get("GPTQ_CALIBRATION_SEQS", "128"))
+GPTQ_CALIBRATION_BATCH_TOKENS = int(os.environ.get("GPTQ_CALIBRATION_BATCH_TOKENS", "8192"))
+GPTQ_HESSIAN_GROUP_SIZE = int(os.environ.get("GPTQ_HESSIAN_GROUP_SIZE", str(INT8_PER_ROW_GROUP_SIZE)))
+GPTQ_MAX_ROWS_PER_OBSERVE = int(os.environ.get("GPTQ_MAX_ROWS_PER_OBSERVE", "64"))
+GPTQ_DAMP_PERCENT = float(os.environ.get("GPTQ_DAMP_PERCENT", "0.01"))
+GPTQ_ACT_ORDER = bool(int(os.environ.get("GPTQ_ACT_ORDER", "1")))
+SPARSE_RESIDUAL_FRAC = float(os.environ.get("SPARSE_RESIDUAL_FRAC", "0.0"))
+SPARSE_RESIDUAL_MODE = os.environ.get("SPARSE_RESIDUAL_MODE", "residual_abs").strip().lower()
+SPARSE_RESIDUAL_STORE_DTYPE = np.float16
+LOWRANK_RESIDUAL_RANK = int(os.environ.get("LOWRANK_RESIDUAL_RANK", "0"))
+LOWRANK_RESIDUAL_MODE = os.environ.get("LOWRANK_RESIDUAL_MODE", "plain").strip().lower()
+LOWRANK_RESIDUAL_STORE_DTYPE = np.float16
+LOWRANK_CALIBRATION_SEQS = int(os.environ.get("LOWRANK_CALIBRATION_SEQS", str(AWQ_CALIBRATION_SEQS)))
+LOWRANK_CALIBRATION_BATCH_TOKENS = int(
+    os.environ.get("LOWRANK_CALIBRATION_BATCH_TOKENS", str(AWQ_CALIBRATION_BATCH_TOKENS))
+)
+
+if QUANT_METHOD not in {"rtn", "gptq"}:
+    raise ValueError(f"Unsupported QUANT_METHOD={QUANT_METHOD}")
+if INPUT_ROTATION not in {"none", "hadamard"}:
+    raise ValueError(f"Unsupported INPUT_ROTATION={INPUT_ROTATION}")
+if SCALAR_QUANTIZER not in {"uniform", "normal_quantile"}:
+    raise ValueError(f"Unsupported SCALAR_QUANTIZER={SCALAR_QUANTIZER}")
+if AWQ_ENABLED and GPTQ_ENABLED:
+    raise ValueError("AWQ and GPTQ cannot both be enabled in the same run")
+if not (0.0 <= SPARSE_RESIDUAL_FRAC < 1.0):
+    raise ValueError(f"SPARSE_RESIDUAL_FRAC must be in [0, 1), got {SPARSE_RESIDUAL_FRAC}")
+if SPARSE_RESIDUAL_MODE not in {"residual_abs"}:
+    raise ValueError(f"Unsupported SPARSE_RESIDUAL_MODE={SPARSE_RESIDUAL_MODE}")
+if LOWRANK_RESIDUAL_RANK < 0:
+    raise ValueError(f"LOWRANK_RESIDUAL_RANK must be non-negative, got {LOWRANK_RESIDUAL_RANK}")
+if LOWRANK_RESIDUAL_MODE not in {"plain", "actscale"}:
+    raise ValueError(f"Unsupported LOWRANK_RESIDUAL_MODE={LOWRANK_RESIDUAL_MODE}")
+
+
+def _np_float32(arr: mx.array) -> np.ndarray:
+    return np.array(arr.astype(mx.float32), dtype=np.float32, copy=False)
+
+
+def signed_qmax_to_bits(qmax: int) -> int:
+    return int(math.ceil(math.log2(max(2 * qmax + 1, 2))))
+
+
+def awq_name_enabled(name: str) -> bool:
+    if not AWQ_ENABLED:
+        return False
+    if AWQ_INCLUDE_NAME_PATTERNS and not any(pattern in name for pattern in AWQ_INCLUDE_NAME_PATTERNS):
+        return False
+    if AWQ_EXCLUDE_NAME_PATTERNS and any(pattern in name for pattern in AWQ_EXCLUDE_NAME_PATTERNS):
+        return False
+    return True
+
+
+def lowrank_residual_enabled() -> bool:
+    return LOWRANK_RESIDUAL_RANK > 0
+
+
+def lowrank_needs_activation_scales() -> bool:
+    return lowrank_residual_enabled() and LOWRANK_RESIDUAL_MODE == "actscale"
+
+
+def keep_float_array(name: str, arr: mx.array, passthrough_orig_dtypes: dict[str, str]) -> np.ndarray:
+    if any(pattern in name for pattern in INT8_KEEP_FLOAT_FP32_NAME_PATTERNS):
+        return np.ascontiguousarray(_np_float32(arr))
+    if arr.dtype in {mx.float32, mx.bfloat16}:
+        passthrough_orig_dtypes[name] = str(arr.dtype).split(".")[-1]
+        return np.ascontiguousarray(np.array(arr.astype(mx.float16), dtype=INT8_KEEP_FLOAT_STORE_DTYPE, copy=False))
+    return np.ascontiguousarray(np.array(arr, copy=True))
+
+
+def is_power_of_two(value: int) -> bool:
+    return value > 0 and (value & (value - 1)) == 0
+
+
+def hadamard_transform_last_axis(arr: np.ndarray) -> np.ndarray:
+    if arr.ndim == 0:
+        return np.array(arr, dtype=np.float32, copy=True)
+    width = int(arr.shape[-1])
+    if not is_power_of_two(width):
+        raise ValueError(f"Hadamard transform requires a power-of-two width, got {width}")
+    out = np.ascontiguousarray(arr.astype(np.float32, copy=True))
+    view = out.reshape(-1, width)
+    inv_sqrt2 = np.float32(1.0 / math.sqrt(2.0))
+    step = 1
+    while step < width:
+        block = step * 2
+        for start in range(0, width, block):
+            mid = start + step
+            end = start + block
+            left = view[:, start:mid].copy()
+            right = view[:, mid:end].copy()
+            view[:, start:mid] = (left + right) * inv_sqrt2
+            view[:, mid:end] = (left - right) * inv_sqrt2
+        step = block
+    return out
+
+
+def deterministic_sign_vector(name: str, width: int) -> np.ndarray:
+    seed_material = f"{ROTATION_SEED}:{name}:{width}".encode("utf-8")
+    seed = int.from_bytes(hashlib.blake2b(seed_material, digest_size=8).digest(), "little", signed=False)
+    rng = np.random.default_rng(seed)
+    return np.ascontiguousarray(rng.choice(np.array((-1.0, 1.0), dtype=np.float32), size=width).astype(np.float32))
+
+
+def maybe_make_rotation_signs(name: str, arr: np.ndarray) -> np.ndarray | None:
+    if INPUT_ROTATION != "hadamard" or arr.ndim != 2 or not is_power_of_two(int(arr.shape[1])):
+        return None
+    return deterministic_sign_vector(name, int(arr.shape[1]))
+
+
+def apply_input_rotation(arr: np.ndarray, sign: np.ndarray | None) -> np.ndarray:
+    if sign is None:
+        return np.ascontiguousarray(arr.astype(np.float32, copy=False))
+    return hadamard_transform_last_axis(arr.astype(np.float32, copy=False) * sign[None, :])
+
+
+def undo_input_rotation(arr: np.ndarray, sign: np.ndarray | None) -> np.ndarray:
+    if sign is None:
+        return np.ascontiguousarray(arr.astype(np.float32, copy=False))
+    return np.ascontiguousarray(hadamard_transform_last_axis(arr) * sign[None, :], dtype=np.float32)
+
+
+_SCALAR_LEVEL_CACHE: dict[tuple[str, int], np.ndarray] = {}
+
+
+def scalar_quantizer_levels(qmax: int, scalar_quantizer: str | None = None) -> np.ndarray:
+    scalar_quantizer = SCALAR_QUANTIZER if scalar_quantizer is None else scalar_quantizer
+    key = (scalar_quantizer, int(qmax))
+    cached = _SCALAR_LEVEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if scalar_quantizer == "uniform":
+        levels = np.arange(-qmax, qmax + 1, dtype=np.float32)
+    elif scalar_quantizer == "normal_quantile":
+        normal = NormalDist()
+        num_levels = 2 * qmax + 1
+        levels = np.array(
+            [normal.inv_cdf((idx + 0.5) / num_levels) for idx in range(num_levels)],
+            dtype=np.float32,
+        )
+        levels[qmax] = 0.0
+    else:
+        raise ValueError(f"Unsupported scalar quantizer {scalar_quantizer}")
+    levels = np.ascontiguousarray(levels.astype(np.float32, copy=False))
+    _SCALAR_LEVEL_CACHE[key] = levels
+    return levels
+
+
+def scalar_quantizer_peak_level(qmax: int, scalar_quantizer: str | None = None) -> float:
+    levels = scalar_quantizer_levels(qmax, scalar_quantizer=scalar_quantizer)
+    return max(float(np.max(np.abs(levels))), 1.0)
+
+
+def quantize_with_fixed_row_scale(
+    values: np.ndarray,
+    scale: np.ndarray,
+    qmax: int,
+    scalar_quantizer: str | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    scalar_quantizer = SCALAR_QUANTIZER if scalar_quantizer is None else scalar_quantizer
+    if scalar_quantizer == "uniform":
+        clip_abs = scale * float(qmax)
+        q = np.clip(
+            np.round(np.clip(values, -clip_abs[:, None], clip_abs[:, None]) / scale[:, None]),
+            -qmax,
+            qmax,
+        ).astype(np.int8, copy=False)
+        dq = q.astype(np.float32) * scale[:, None]
+        return np.ascontiguousarray(q), np.ascontiguousarray(dq.astype(np.float32, copy=False))
+
+    levels = scalar_quantizer_levels(qmax, scalar_quantizer=scalar_quantizer)
+    boundaries = 0.5 * (levels[:-1] + levels[1:])
+    peak = float(max(abs(float(levels[0])), abs(float(levels[-1]))))
+    clipped = np.clip(values / scale[:, None], -peak, peak)
+    indices = np.searchsorted(boundaries, clipped, side="right")
+    q = np.clip(indices - qmax, -qmax, qmax).astype(np.int8, copy=False)
+    dq = levels[np.clip(q.astype(np.int16) + qmax, 0, 2 * qmax)] * scale[:, None]
+    return np.ascontiguousarray(q), np.ascontiguousarray(dq.astype(np.float32, copy=False))
+
+
+def dequantize_codes(
+    q_np: np.ndarray,
+    scale: np.ndarray,
+    qmax: int,
+    scalar_quantizer: str | None = None,
+) -> np.ndarray:
+    scalar_quantizer = SCALAR_QUANTIZER if scalar_quantizer is None else scalar_quantizer
+    if scalar_quantizer == "uniform":
+        return q_np.astype(np.float32) * scale
+    levels = scalar_quantizer_levels(qmax, scalar_quantizer=scalar_quantizer)
+    indices = np.clip(q_np.astype(np.int16) + qmax, 0, 2 * qmax)
+    return levels[indices] * scale
+
+
+def select_sparse_residual_entries(residual: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if SPARSE_RESIDUAL_FRAC <= 0.0:
+        return None, None
+    flat = np.ascontiguousarray(residual.reshape(-1), dtype=np.float32)
+    if flat.size == 0:
+        return None, None
+    k = int(round(SPARSE_RESIDUAL_FRAC * flat.size))
+    if k <= 0:
+        return None, None
+    k = min(k, flat.size)
+    scores = np.abs(flat)
+    if k == flat.size:
+        idx = np.arange(flat.size, dtype=np.uint32)
+    else:
+        idx = np.argpartition(scores, -k)[-k:].astype(np.uint32, copy=False)
+        idx.sort()
+    values = np.ascontiguousarray(flat[idx].astype(SPARSE_RESIDUAL_STORE_DTYPE, copy=False))
+    return np.ascontiguousarray(idx), values
+
+
+def add_sparse_residual(out_arr: np.ndarray, indices: np.ndarray | None, values: np.ndarray | None) -> np.ndarray:
+    if indices is None or values is None or indices.size == 0:
+        return out_arr
+    flat = out_arr.reshape(-1)
+    flat[np.asarray(indices, dtype=np.int64)] += np.asarray(values, dtype=np.float32)
+    return out_arr
+
+
+def zero_flat_indices(arr: np.ndarray, indices: np.ndarray | None) -> np.ndarray:
+    if indices is None or indices.size == 0:
+        return np.ascontiguousarray(arr.astype(np.float32, copy=False))
+    out = np.ascontiguousarray(arr.astype(np.float32, copy=True))
+    out.reshape(-1)[np.asarray(indices, dtype=np.int64)] = 0.0
+    return out
+
+
+def quantize_float32_array(f32: np.ndarray, qmax: int) -> tuple[np.ndarray, np.ndarray]:
+    peak_level = scalar_quantizer_peak_level(qmax)
+    if f32.ndim == 2:
+        # Matrices use per-row group scales so one local outlier chunk does not
+        # set the scale for an entire row at low bitwidth.
+        rows, cols = f32.shape
+        if cols > INT8_PER_ROW_GROUP_SIZE:
+            num_groups = math.ceil(cols / INT8_PER_ROW_GROUP_SIZE)
+            q = np.empty((rows, cols), dtype=np.int8)
+            scale = np.empty((rows, num_groups), dtype=np.float32)
+            for group_idx in range(num_groups):
+                start = group_idx * INT8_PER_ROW_GROUP_SIZE
+                end = min(start + INT8_PER_ROW_GROUP_SIZE, cols)
+                chunk = f32[:, start:end]
+                clip_abs = (
+                    np.quantile(np.abs(chunk), INT8_CLIP_Q, axis=1)
+                    if chunk.size
+                    else np.empty((rows,), dtype=np.float32)
+                )
+                group_scale = np.maximum(
+                    clip_abs / peak_level,
+                    1.0 / peak_level,
+                ).astype(np.float32, copy=False)
+                q_chunk, _ = quantize_with_fixed_row_scale(chunk, group_scale, qmax=qmax)
+                q[:, start:end] = q_chunk
+                scale[:, group_idx] = group_scale
+            return np.ascontiguousarray(q), np.ascontiguousarray(scale.astype(INT8_PER_ROW_SCALE_DTYPE, copy=False))
+
+        clip_abs = np.quantile(np.abs(f32), INT8_CLIP_Q, axis=1) if f32.size else np.empty((rows,), dtype=np.float32)
+        scale = np.maximum(clip_abs / peak_level, 1.0 / peak_level).astype(np.float32, copy=False)
+        q, _ = quantize_with_fixed_row_scale(f32, scale, qmax=qmax)
+        return np.ascontiguousarray(q), np.ascontiguousarray(scale.astype(INT8_PER_ROW_SCALE_DTYPE, copy=False))
+
+    # Vectors / scalars use a simpler per-tensor scale.
+    clip_abs = float(np.quantile(np.abs(f32).reshape(-1), INT8_CLIP_Q)) if f32.size else 0.0
+    scale = np.array(clip_abs / peak_level if clip_abs > 0.0 else 1.0, dtype=np.float32)
+    q, _ = quantize_with_fixed_row_scale(
+        np.ascontiguousarray(f32.reshape(1, -1)),
+        np.array((float(scale),), dtype=np.float32),
+        qmax=qmax,
+    )
+    q = q.reshape(f32.shape)
+    return np.ascontiguousarray(q), scale
+
+
+def regularized_hessian_inverse(hessian: np.ndarray) -> np.ndarray:
+    h = np.asarray(hessian, dtype=np.float64)
+    if h.ndim != 2 or h.shape[0] != h.shape[1]:
+        raise ValueError(f"Expected square Hessian, got shape {h.shape}")
+    diag_mean = float(np.mean(np.diag(h))) if h.size else 1.0
+    damp = max(GPTQ_DAMP_PERCENT * max(diag_mean, 0.0), 1e-4)
+    h_reg = h + np.eye(h.shape[0], dtype=np.float64) * damp
+    try:
+        h_inv = np.linalg.inv(h_reg)
+    except np.linalg.LinAlgError:
+        h_inv = np.linalg.pinv(h_reg, hermitian=True)
+    return np.ascontiguousarray(h_inv.astype(np.float32, copy=False))
+
+
+def gptq_quantize_group_matrix(
+    group: np.ndarray,
+    qmax: int,
+    hessian: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    rows, cols = group.shape
+    clip_abs = np.quantile(np.abs(group), INT8_CLIP_Q, axis=1) if group.size else np.empty((rows,), dtype=np.float32)
+    peak_level = scalar_quantizer_peak_level(qmax)
+    scale = np.maximum(clip_abs / peak_level, 1.0 / peak_level).astype(np.float32, copy=False)
+    if hessian is None or hessian.shape != (cols, cols):
+        hessian = np.eye(cols, dtype=np.float32)
+    h_inv = regularized_hessian_inverse(hessian)
+    if GPTQ_ACT_ORDER and cols > 1:
+        order = np.argsort(-np.diag(np.asarray(hessian, dtype=np.float32)))
+    else:
+        order = np.arange(cols)
+    work = np.ascontiguousarray(group[:, order].astype(np.float32, copy=True))
+    perm_h_inv = h_inv[np.ix_(order, order)]
+    q_perm = np.empty((rows, cols), dtype=np.int8)
+    for col in range(cols):
+        q_col, dq_col = quantize_with_fixed_row_scale(work[:, col:col + 1], scale, qmax=qmax)
+        q_perm[:, col] = q_col[:, 0]
+        denom = max(float(perm_h_inv[col, col]), 1e-6)
+        error = (work[:, col] - dq_col[:, 0]) / denom
+        if col + 1 < cols:
+            work[:, col + 1:] -= error[:, None] * perm_h_inv[col, col + 1:][None, :]
+    q_out = np.empty_like(q_perm)
+    q_out[:, order] = q_perm
+    return np.ascontiguousarray(q_out), np.ascontiguousarray(scale.astype(INT8_PER_ROW_SCALE_DTYPE, copy=False))
+
+
+def quantize_float32_array_gptq(
+    f32: np.ndarray,
+    qmax: int,
+    hessian_groups: list[np.ndarray] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if f32.ndim != 2:
+        return quantize_float32_array(f32, qmax=qmax)
+    rows, cols = f32.shape
+    if cols > INT8_PER_ROW_GROUP_SIZE:
+        num_groups = math.ceil(cols / INT8_PER_ROW_GROUP_SIZE)
+        q = np.empty((rows, cols), dtype=np.int8)
+        scale = np.empty((rows, num_groups), dtype=np.float32)
+        for group_idx in range(num_groups):
+            start = group_idx * INT8_PER_ROW_GROUP_SIZE
+            end = min(start + INT8_PER_ROW_GROUP_SIZE, cols)
+            chunk = f32[:, start:end]
+            hessian = None
+            if hessian_groups is not None and group_idx < len(hessian_groups):
+                hessian = hessian_groups[group_idx]
+            q_chunk, scale_chunk = gptq_quantize_group_matrix(chunk, qmax=qmax, hessian=hessian)
+            q[:, start:end] = q_chunk
+            scale[:, group_idx] = scale_chunk
+        return np.ascontiguousarray(q), np.ascontiguousarray(scale.astype(INT8_PER_ROW_SCALE_DTYPE, copy=False))
+
+    base_hessian = None if not hessian_groups else hessian_groups[0]
+    return gptq_quantize_group_matrix(f32, qmax=qmax, hessian=base_hessian)
+
+
+def dequantize_quantized_array(
+    q_np: np.ndarray,
+    scale: np.ndarray,
+    meta: dict[str, object],
+    column_scale: np.ndarray | None = None,
+) -> np.ndarray:
+    qmax = int(meta.get("qmax", INT8_RTN_QMAX))
+    scalar_quantizer = str(meta.get("scalar_quantizer", "uniform"))
+    if meta.get("scheme") == "per_row_group":
+        group_size = int(meta["group_size"])
+        out_arr = np.empty(q_np.shape, dtype=np.float32)
+        for group_idx in range(scale.shape[1]):
+            start = group_idx * group_size
+            end = min(start + group_size, q_np.shape[1])
+            out_arr[:, start:end] = dequantize_codes(
+                q_np[:, start:end],
+                scale[:, group_idx][:, None],
+                qmax=qmax,
+                scalar_quantizer=scalar_quantizer,
+            )
+    elif meta.get("scheme") == "per_row" or scale.ndim > 0:
+        out_arr = dequantize_codes(
+            q_np,
+            scale.reshape((q_np.shape[0],) + (1,) * (q_np.ndim - 1)),
+            qmax=qmax,
+            scalar_quantizer=scalar_quantizer,
+        )
+    else:
+        out_arr = dequantize_codes(
+            q_np,
+            np.array(float(scale), dtype=np.float32),
+            qmax=qmax,
+            scalar_quantizer=scalar_quantizer,
+        )
+    if column_scale is not None and out_arr.ndim == 2:
+        out_arr = out_arr / column_scale[None, :]
+    return out_arr
+
+
+def make_awq_column_scale(act_abs_mean: np.ndarray, alpha: float) -> np.ndarray:
+    if alpha <= 0.0:
+        return np.ones_like(act_abs_mean, dtype=np.float32)
+    scale = np.asarray(np.maximum(act_abs_mean, AWQ_MIN_ACT_SCALE) ** alpha, dtype=np.float32)
+    geom_mean = float(np.exp(np.mean(np.log(np.maximum(scale, AWQ_MIN_ACT_SCALE)))))
+    scale = scale / max(geom_mean, AWQ_MIN_ACT_SCALE)
+    return np.ascontiguousarray(np.clip(scale, 1.0 / AWQ_MAX_SCALE, AWQ_MAX_SCALE).astype(np.float32, copy=False))
+
+
+def select_lowrank_residual_factors(
+    residual: np.ndarray,
+    act_abs_mean: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, np.ndarray | None, bool]:
+    if not lowrank_residual_enabled() or residual.ndim != 2 or residual.size == 0:
+        return None, None, False
+    rank = min(LOWRANK_RESIDUAL_RANK, residual.shape[0], residual.shape[1])
+    if rank <= 0:
+        return None, None, False
+
+    work = np.ascontiguousarray(residual.astype(np.float32, copy=False))
+    used_actscale = False
+    if (
+        LOWRANK_RESIDUAL_MODE == "actscale"
+        and act_abs_mean is not None
+        and act_abs_mean.ndim == 1
+        and act_abs_mean.shape[0] == residual.shape[1]
+    ):
+        column_scale = make_awq_column_scale(np.asarray(act_abs_mean, dtype=np.float32), alpha=1.0)
+        work = np.ascontiguousarray(work * column_scale[None, :], dtype=np.float32)
+        used_actscale = True
+    else:
+        column_scale = None
+
+    try:
+        u, s, vt = np.linalg.svd(work, full_matrices=False)
+    except np.linalg.LinAlgError:
+        return None, None, used_actscale
+    if s.size == 0 or not np.isfinite(s[0]) or float(s[0]) <= 0.0:
+        return None, None, used_actscale
+
+    left = np.ascontiguousarray((u[:, :rank] * s[:rank][None, :]).astype(LOWRANK_RESIDUAL_STORE_DTYPE, copy=False))
+    right = np.asarray(vt[:rank, :], dtype=np.float32)
+    if column_scale is not None:
+        right = right / column_scale[None, :]
+    right = np.ascontiguousarray(right.astype(LOWRANK_RESIDUAL_STORE_DTYPE, copy=False))
+    return left, right, used_actscale
+
+
+def add_lowrank_residual(
+    out_arr: np.ndarray,
+    left: np.ndarray | None,
+    right: np.ndarray | None,
+) -> np.ndarray:
+    if left is None or right is None or out_arr.ndim != 2:
+        return out_arr
+    return np.ascontiguousarray(
+        out_arr.astype(np.float32, copy=False)
+        + np.asarray(left, dtype=np.float32) @ np.asarray(right, dtype=np.float32),
+        dtype=np.float32,
+    )
+
+
+def search_awq_column_scale(
+    name: str,
+    arr: mx.array,
+    act_abs_mean: np.ndarray | None,
+    qmax: int,
+    log_fn: Callable[[str], None] | None = None,
+) -> tuple[np.ndarray | None, float | None]:
+    if not awq_name_enabled(name) or act_abs_mean is None or arr.ndim != 2:
+        return None, None
+    f32 = _np_float32(arr)
+    importance = np.asarray(np.maximum(act_abs_mean, AWQ_MIN_ACT_SCALE), dtype=np.float32)
+    importance = importance / max(float(np.mean(importance)), AWQ_MIN_ACT_SCALE)
+    best_alpha = 0.0
+    best_error = float("inf")
+    best_column_scale = np.ones_like(importance, dtype=np.float32)
+    for alpha in AWQ_ALPHA_GRID or (0.0,):
+        column_scale = make_awq_column_scale(importance, alpha)
+        q, s = quantize_float32_array(f32 * column_scale[None, :], qmax=qmax)
+        meta = {"scheme": "per_row_group", "group_size": INT8_PER_ROW_GROUP_SIZE} if s.ndim == 2 else {"scheme": "per_row"}
+        dq = dequantize_quantized_array(q, np.asarray(s, dtype=np.float32), meta, column_scale=column_scale)
+        error = float(np.mean(np.square((f32 - dq) * importance[None, :]), dtype=np.float64))
+        if error < best_error:
+            best_error = error
+            best_alpha = float(alpha)
+            best_column_scale = column_scale
+    if best_alpha <= 0.0:
+        return None, None
+    if log_fn is not None:
+        log_fn(
+            f"awq_tensor:{name} alpha:{best_alpha:.2f} "
+            f"scale_min:{float(best_column_scale.min()):.4f} scale_max:{float(best_column_scale.max()):.4f} "
+            f"weighted_mse:{best_error:.8e}"
+        )
+    return best_column_scale, best_alpha
+
+
+def quantize_float_array(
+    f32: np.ndarray,
+    qmax: int,
+    column_scale: np.ndarray | None = None,
+    gptq_hessian_groups: list[np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if column_scale is not None and f32.ndim == 2:
+        f32 = f32 * column_scale[None, :]
+    if GPTQ_ENABLED:
+        return quantize_float32_array_gptq(f32, qmax=qmax, hessian_groups=gptq_hessian_groups)
+    return quantize_float32_array(f32, qmax=qmax)
+
+
+def quantize_state_dict_int8(
+    flat_state: dict[str, mx.array],
+    awq_activation_scales: dict[str, np.ndarray] | None = None,
+    gptq_hessian_groups: dict[str, list[np.ndarray]] | None = None,
+    log_fn: Callable[[str], None] | None = None,
+) -> tuple[dict[str, object], dict[str, int]]:
+    quantized: dict[str, np.ndarray] = {}
+    scales: dict[str, np.ndarray] = {}
+    awq_scales: dict[str, np.ndarray] = {}
+    rotation_signs: dict[str, np.ndarray] = {}
+    sparse_residual_indices: dict[str, np.ndarray] = {}
+    sparse_residual_values: dict[str, np.ndarray] = {}
+    lowrank_residual_left: dict[str, np.ndarray] = {}
+    lowrank_residual_right: dict[str, np.ndarray] = {}
+    dtypes: dict[str, str] = {}
+    passthrough: dict[str, np.ndarray] = {}
+    passthrough_orig_dtypes: dict[str, str] = {}
+    qmeta: dict[str, dict[str, object]] = {}
+    stats = dict.fromkeys(
+        (
+            "param_count",
+            "num_tensors",
+            "num_float_tensors",
+            "num_nonfloat_tensors",
+            "baseline_tensor_bytes",
+            "int8_payload_bytes",
+            "num_awq_tensors",
+            "awq_scale_bytes",
+            "num_gptq_tensors",
+            "num_rotated_tensors",
+            "rotation_bytes",
+            "num_sparse_residual_tensors",
+            "sparse_residual_values",
+            "sparse_residual_bytes",
+            "num_lowrank_residual_tensors",
+            "lowrank_residual_rank_sum",
+            "lowrank_residual_bytes",
+        ),
+        0,
+    )
+    for name, arr in flat_state.items():
+        stats["param_count"] += int(arr.size)
+        stats["num_tensors"] += 1
+        stats["baseline_tensor_bytes"] += int(arr.nbytes)
+        if not mx.issubdtype(arr.dtype, mx.floating):
+            stats["num_nonfloat_tensors"] += 1
+            passthrough[name] = np.ascontiguousarray(np.array(arr))
+            stats["int8_payload_bytes"] += int(passthrough[name].nbytes)
+            continue
+
+        # Small float tensors are cheap enough to keep directly. We still downcast
+        # fp32/bf16 passthrough tensors to fp16 so metadata does not dominate size.
+        if int(arr.size) <= INT8_KEEP_FLOAT_MAX_NUMEL or (name == "tok_emb.weight" and not QUANTIZE_TIED_HEAD):
+            kept = keep_float_array(name, arr, passthrough_orig_dtypes)
+            passthrough[name] = kept
+            stats["int8_payload_bytes"] += int(kept.nbytes)
+            continue
+
+        stats["num_float_tensors"] += 1
+        qmax = INT8_HEAD_QMAX if name == "tok_emb.weight" else INT8_RTN_QMAX
+        f32 = _np_float32(arr)
+        sign = maybe_make_rotation_signs(name, f32)
+        quant_source = apply_input_rotation(f32, sign)
+        awq_arr = mx.array(quant_source, dtype=arr.dtype) if AWQ_ENABLED else arr
+        column_scale, awq_alpha = search_awq_column_scale(
+            name,
+            awq_arr,
+            None if awq_activation_scales is None else awq_activation_scales.get(name),
+            qmax=qmax,
+            log_fn=log_fn,
+        )
+        q, s = quantize_float_array(
+            quant_source,
+            qmax=qmax,
+            column_scale=column_scale,
+            gptq_hessian_groups=None if gptq_hessian_groups is None else gptq_hessian_groups.get(name),
+        )
+        meta: dict[str, object] = {"qmax": int(qmax), "scalar_quantizer": SCALAR_QUANTIZER}
+        if s.ndim == 2:
+            meta.update({"scheme": "per_row_group", "axis": 0, "group_size": INT8_PER_ROW_GROUP_SIZE})
+        elif s.ndim > 0:
+            meta.update({"scheme": "per_row", "axis": 0})
+        if column_scale is not None:
+            meta["awq_alpha"] = float(awq_alpha)
+            awq_scale_arr = np.ascontiguousarray(column_scale.astype(AWQ_SCALE_STORE_DTYPE, copy=False))
+            awq_scales[name] = awq_scale_arr
+            stats["int8_payload_bytes"] += int(awq_scale_arr.nbytes)
+            stats["num_awq_tensors"] += 1
+            stats["awq_scale_bytes"] += int(awq_scale_arr.nbytes)
+        if sign is not None:
+            rotation_arr = np.ascontiguousarray(sign.astype(np.int8, copy=False))
+            rotation_signs[name] = rotation_arr
+            meta["input_rotation"] = INPUT_ROTATION
+            stats["num_rotated_tensors"] += 1
+            stats["rotation_bytes"] += int(rotation_arr.nbytes)
+            stats["int8_payload_bytes"] += int(rotation_arr.nbytes)
+        if gptq_hessian_groups is not None and name in gptq_hessian_groups:
+            meta["quant_method"] = QUANT_METHOD
+            stats["num_gptq_tensors"] += 1
+        dense_rot = dequantize_quantized_array(
+            q,
+            np.asarray(s, dtype=np.float32),
+            meta,
+            column_scale=column_scale,
+        )
+        dense_orig = undo_input_rotation(dense_rot, sign)
+        residual = np.ascontiguousarray(f32 - dense_orig, dtype=np.float32)
+        sparse_idx, sparse_vals = select_sparse_residual_entries(residual)
+        if sparse_idx is not None and sparse_vals is not None and sparse_idx.size > 0:
+            sparse_residual_indices[name] = sparse_idx
+            sparse_residual_values[name] = sparse_vals
+            meta["sparse_residual_frac"] = float(SPARSE_RESIDUAL_FRAC)
+            meta["sparse_residual_mode"] = SPARSE_RESIDUAL_MODE
+            stats["num_sparse_residual_tensors"] += 1
+            stats["sparse_residual_values"] += int(sparse_idx.size)
+            sparse_bytes = int(sparse_idx.nbytes + sparse_vals.nbytes)
+            stats["sparse_residual_bytes"] += sparse_bytes
+            stats["int8_payload_bytes"] += sparse_bytes
+        lowrank_left, lowrank_right, lowrank_used_actscale = select_lowrank_residual_factors(
+            zero_flat_indices(residual, sparse_idx),
+            None if awq_activation_scales is None else awq_activation_scales.get(name),
+        )
+        if lowrank_left is not None and lowrank_right is not None:
+            lowrank_residual_left[name] = lowrank_left
+            lowrank_residual_right[name] = lowrank_right
+            meta["lowrank_residual_rank"] = int(lowrank_left.shape[1])
+            meta["lowrank_residual_mode"] = LOWRANK_RESIDUAL_MODE
+            meta["lowrank_residual_actscaled"] = int(lowrank_used_actscale)
+            stats["num_lowrank_residual_tensors"] += 1
+            stats["lowrank_residual_rank_sum"] += int(lowrank_left.shape[1])
+            lowrank_bytes = int(lowrank_left.nbytes + lowrank_right.nbytes)
+            stats["lowrank_residual_bytes"] += lowrank_bytes
+            stats["int8_payload_bytes"] += lowrank_bytes
+        if meta:
+            qmeta[name] = meta
+        quantized[name] = q
+        scales[name] = s
+        dtypes[name] = str(arr.dtype).split(".")[-1]
+        stats["int8_payload_bytes"] += int(q.nbytes + s.nbytes)
+    body_tag = f"int{signed_qmax_to_bits(INT8_RTN_QMAX)}_group{INT8_PER_ROW_GROUP_SIZE}"
+    head_tag = f"headint{signed_qmax_to_bits(INT8_HEAD_QMAX)}" if QUANTIZE_TIED_HEAD else "tiedemb_fp16"
+    awq_tag = "_awq" if AWQ_ENABLED else ""
+    method_tag = f"_{QUANT_METHOD}" if QUANT_METHOD != "rtn" else ""
+    rotation_tag = "_rht" if INPUT_ROTATION == "hadamard" else ""
+    scalar_tag = "_normalq" if SCALAR_QUANTIZER == "normal_quantile" else ""
+    sparse_tag = "_sparseresid" if SPARSE_RESIDUAL_FRAC > 0.0 else ""
+    lowrank_tag = (
+        f"_lowrankr{LOWRANK_RESIDUAL_RANK}{'_act' if LOWRANK_RESIDUAL_MODE == 'actscale' else ''}"
+        if lowrank_residual_enabled()
+        else ""
+    )
+    obj: dict[str, object] = {
+        "__quant_format__": (
+            f"{body_tag}_{head_tag}{rotation_tag}{method_tag}{scalar_tag}{sparse_tag}{lowrank_tag}{awq_tag}_per_row_v1"
+        ),
+        "quantized": quantized,
+        "scales": scales,
+        "dtypes": dtypes,
+        "passthrough": passthrough,
+    }
+    if qmeta:
+        obj["qmeta"] = qmeta
+    if awq_scales:
+        obj["awq_scales"] = awq_scales
+    if rotation_signs:
+        obj["rotation_signs"] = rotation_signs
+    if sparse_residual_indices:
+        obj["sparse_residual_indices"] = sparse_residual_indices
+        obj["sparse_residual_values"] = sparse_residual_values
+    if lowrank_residual_left:
+        obj["lowrank_residual_left"] = lowrank_residual_left
+        obj["lowrank_residual_right"] = lowrank_residual_right
+    if passthrough_orig_dtypes:
+        obj["passthrough_orig_dtypes"] = passthrough_orig_dtypes
+    return obj, stats
+
+
+def dequantize_state_dict_int8(quant_obj: dict[str, object]) -> dict[str, mx.array]:
+    out: dict[str, mx.array] = {}
+    qmeta = quant_obj.get("qmeta", {})
+    awq_scales = quant_obj.get("awq_scales", {})
+    rotation_signs = quant_obj.get("rotation_signs", {})
+    sparse_residual_indices = quant_obj.get("sparse_residual_indices", {})
+    sparse_residual_values = quant_obj.get("sparse_residual_values", {})
+    lowrank_residual_left = quant_obj.get("lowrank_residual_left", {})
+    lowrank_residual_right = quant_obj.get("lowrank_residual_right", {})
+    passthrough_orig_dtypes = quant_obj.get("passthrough_orig_dtypes", {})
+    for name, q in quant_obj["quantized"].items():
+        q_np = np.asarray(q, dtype=np.int8)
+        dtype_name = quant_obj["dtypes"][name]
+        scale = np.asarray(quant_obj["scales"][name], dtype=np.float32)
+        column_scale = (
+            np.asarray(awq_scales[name], dtype=np.float32)
+            if name in awq_scales
+            else None
+        )
+        out_arr = dequantize_quantized_array(
+            q_np,
+            scale,
+            qmeta.get(name, {}),
+            column_scale=column_scale,
+        )
+        sign = (
+            np.asarray(rotation_signs[name], dtype=np.float32)
+            if name in rotation_signs
+            else None
+        )
+        out_arr = undo_input_rotation(out_arr, sign)
+        out_arr = add_sparse_residual(
+            out_arr,
+            None if name not in sparse_residual_indices else np.asarray(sparse_residual_indices[name], dtype=np.uint32),
+            None if name not in sparse_residual_values else np.asarray(sparse_residual_values[name], dtype=np.float32),
+        )
+        out_arr = add_lowrank_residual(
+            out_arr,
+            None if name not in lowrank_residual_left else np.asarray(lowrank_residual_left[name], dtype=np.float32),
+            None if name not in lowrank_residual_right else np.asarray(lowrank_residual_right[name], dtype=np.float32),
+        )
+        out[name] = mx.array(out_arr, dtype=MX_DTYPE_FROM_NAME[dtype_name])
+    for name, arr in quant_obj["passthrough"].items():
+        # Restore small tensors, undoing the temporary fp16 storage cast if needed.
+        out_arr = np.array(arr, copy=True)
+        orig_dtype = passthrough_orig_dtypes.get(name)
+        if isinstance(orig_dtype, str):
+            out[name] = mx.array(out_arr, dtype=MX_DTYPE_FROM_NAME[orig_dtype])
+        else:
+            out[name] = mx.array(out_arr)
+    return out
+
+
+def build_sentencepiece_luts(
+    sp: spm.SentencePieceProcessor, vocab_size: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    sp_vocab_size = int(sp.vocab_size())
+    table_size = max(sp_vocab_size, vocab_size)
+    base_bytes_lut = np.zeros((table_size,), dtype=np.int16)
+    has_leading_space_lut = np.zeros((table_size,), dtype=np.bool_)
+    is_boundary_token_lut = np.ones((table_size,), dtype=np.bool_)
+    for token_id in range(sp_vocab_size):
+        if sp.is_control(token_id) or sp.is_unknown(token_id) or sp.is_unused(token_id):
+            continue
+        is_boundary_token_lut[token_id] = False
+        if sp.is_byte(token_id):
+            base_bytes_lut[token_id] = 1
+            continue
+        piece = sp.id_to_piece(token_id)
+        if piece.startswith("▁"):
+            has_leading_space_lut[token_id] = True
+            piece = piece[1:]
+        base_bytes_lut[token_id] = len(piece.encode("utf-8"))
+    return base_bytes_lut, has_leading_space_lut, is_boundary_token_lut
+
+
+def validate_dataset_tokenizer_pair(data_path: str, tokenizer_path: str) -> tuple[str, int, int | None]:
+    # The shard directory and tokenizer are coupled: val_bpb is only meaningful if we
+    # decode bytes with the exact tokenizer that produced the shards. The manifest
+    # lets the training script fail fast on accidental dataset/tokenizer mismatches.
+    dataset_dir = Path(data_path).resolve()
+    actual_train_files = len(list(dataset_dir.glob("fineweb_train_*.bin")))
+    if len(dataset_dir.parents) < 2:
+        return dataset_dir.name, actual_train_files, None
+    manifest_path = dataset_dir.parents[1] / "manifest.json"
+    if not manifest_path.is_file():
+        return dataset_dir.name, actual_train_files, None
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    dataset_entry = next((x for x in manifest.get("datasets", []) if x.get("name") == dataset_dir.name), None)
+    if dataset_entry is None:
+        return dataset_dir.name, actual_train_files, None
+
+    tokenizer_name = dataset_entry.get("tokenizer_name")
+    tokenizer_entry = (
+        next((x for x in manifest.get("tokenizers", []) if x.get("name") == tokenizer_name), None)
+        if tokenizer_name
+        else None
+    )
+    expected_name = Path((tokenizer_entry or {}).get("model_path") or (tokenizer_entry or {}).get("path") or "").name
+    if expected_name and Path(tokenizer_path).name != expected_name:
+        raise ValueError(f"{dataset_dir.name} expects tokenizer {expected_name}, got {Path(tokenizer_path).name}")
+    expected_train_files = (dataset_entry.get("stats") or {}).get("files_train")
+    if expected_train_files is not None:
+        expected_train_files = int(expected_train_files)
+        if actual_train_files > expected_train_files:
+            raise ValueError(
+                f"{dataset_dir.name} has more train shards than expected: found {actual_train_files}, "
+                f"manifest says {expected_train_files}"
+            )
+    return dataset_dir.name, actual_train_files, expected_train_files
+
+
+def load_validation_tokens(pattern: str, seq_len: int) -> np.ndarray:
+    files = [Path(p) for p in sorted(glob.glob(pattern))]
+    if not files:
+        raise FileNotFoundError(f"No files found for pattern: {pattern}")
+    # The export pipeline writes the fixed first-50k-doc validation set to fineweb_val_*.
+    tokens = np.ascontiguousarray(np.concatenate([load_data_shard(file) for file in files], axis=0))
+    usable = ((tokens.size - 1) // seq_len) * seq_len
+    if usable <= 0:
+        raise ValueError(f"Validation split is too short for TRAIN_SEQ_LEN={seq_len}")
+    return tokens[: usable + 1]
+
+
+def select_validation_tokens(tokens: np.ndarray, seq_len: int, subset_seqs: int) -> tuple[np.ndarray, int, int]:
+    total_seqs = (tokens.size - 1) // seq_len
+    if subset_seqs <= 0:
+        return tokens, total_seqs, total_seqs
+    selected_seqs = min(subset_seqs, total_seqs)
+    if selected_seqs <= 0:
+        raise ValueError(f"VAL_SUBSET_SEQS must be positive when set, got {subset_seqs}")
+    selected_tokens = np.ascontiguousarray(tokens[: selected_seqs * seq_len + 1])
+    return selected_tokens, selected_seqs, total_seqs
+
+
+def collect_awq_activation_scales(
+    args: Hyperparameters,
+    model: GPT,
+    train_pattern: str,
+    dataset_name: str,
+    log_fn: Callable[[str], None] | None = None,
+) -> dict[str, np.ndarray]:
+    awq_requested = AWQ_ENABLED and AWQ_CALIBRATION_SEQS > 0
+    lowrank_requested = lowrank_needs_activation_scales() and LOWRANK_CALIBRATION_SEQS > 0
+    if not (awq_requested or lowrank_requested):
+        return {}
+    calibration_seqs = max(
+        AWQ_CALIBRATION_SEQS if awq_requested else 0,
+        LOWRANK_CALIBRATION_SEQS if lowrank_requested else 0,
+    )
+    calibration_batch_tokens = max(
+        AWQ_CALIBRATION_BATCH_TOKENS if awq_requested else 0,
+        LOWRANK_CALIBRATION_BATCH_TOKENS if lowrank_requested else 0,
+    )
+    batch_tokens = max(
+        args.train_seq_len,
+        (calibration_batch_tokens // args.train_seq_len) * args.train_seq_len,
+    )
+    batch_seqs = max(batch_tokens // args.train_seq_len, 1)
+    loader = TokenLoader(train_pattern, log_fn=None, dataset_name=dataset_name)
+    collector = ActivationAbsMeanCollector()
+    global _ACTIVE_ACTIVATION_COLLECTOR
+    prev_collector = _ACTIVE_ACTIVATION_COLLECTOR
+    _ACTIVE_ACTIVATION_COLLECTOR = collector
+    processed_seqs = 0
+    try:
+        while processed_seqs < calibration_seqs:
+            current_seqs = min(batch_seqs, calibration_seqs - processed_seqs)
+            x, _ = loader.next_batch(current_seqs * args.train_seq_len, args.train_seq_len)
+            hidden = model(x)
+            mx.eval(hidden)
+            mx.synchronize()
+            processed_seqs += current_seqs
+            if log_fn is not None and (
+                processed_seqs == current_seqs
+                or processed_seqs == calibration_seqs
+                or processed_seqs % (8 * batch_seqs) == 0
+            ):
+                log_fn(f"activation_calibration_progress:seqs {processed_seqs}/{calibration_seqs}")
+    finally:
+        _ACTIVE_ACTIVATION_COLLECTOR = prev_collector
+    return collector.finalize()
+
+
+def collect_gptq_hessian_groups(
+    args: Hyperparameters,
+    model: GPT,
+    train_pattern: str,
+    dataset_name: str,
+    log_fn: Callable[[str], None] | None = None,
+) -> dict[str, list[np.ndarray]]:
+    if not GPTQ_ENABLED or GPTQ_CALIBRATION_SEQS <= 0:
+        return {}
+    batch_tokens = max(
+        args.train_seq_len,
+        (GPTQ_CALIBRATION_BATCH_TOKENS // args.train_seq_len) * args.train_seq_len,
+    )
+    batch_seqs = max(batch_tokens // args.train_seq_len, 1)
+    loader = TokenLoader(train_pattern, log_fn=None, dataset_name=dataset_name)
+    collector = ActivationSecondMomentCollector(
+        group_size=GPTQ_HESSIAN_GROUP_SIZE,
+        max_rows_per_observe=GPTQ_MAX_ROWS_PER_OBSERVE,
+    )
+    global _ACTIVE_ACTIVATION_COLLECTOR
+    prev_collector = _ACTIVE_ACTIVATION_COLLECTOR
+    _ACTIVE_ACTIVATION_COLLECTOR = collector
+    processed_seqs = 0
+    try:
+        while processed_seqs < GPTQ_CALIBRATION_SEQS:
+            current_seqs = min(batch_seqs, GPTQ_CALIBRATION_SEQS - processed_seqs)
+            x, _ = loader.next_batch(current_seqs * args.train_seq_len, args.train_seq_len)
+            hidden = model(x)
+            mx.eval(hidden)
+            mx.synchronize()
+            processed_seqs += current_seqs
+            if log_fn is not None and (
+                processed_seqs == current_seqs
+                or processed_seqs == GPTQ_CALIBRATION_SEQS
+                or processed_seqs % (8 * batch_seqs) == 0
+            ):
+                log_fn(f"gptq_calibration_progress:seqs {processed_seqs}/{GPTQ_CALIBRATION_SEQS}")
+    finally:
+        _ACTIVE_ACTIVATION_COLLECTOR = prev_collector
+    return collector.finalize()
+
+
+def loss_and_grad_chunked(
+    args: Hyperparameters,
+    train_loader: TokenLoader,
+    compiled_loss_and_grad,
+) -> tuple[mx.array, dict]:
+    chunk_sizes = token_chunks(args.microbatch_tokens, args.train_seq_len, args.mlx_max_microbatch_tokens)
+    total_tokens = float(sum(chunk_sizes))
+    loss_value = mx.array(0.0, dtype=mx.float32)
+    grad_accum: dict[str, mx.array] | None = None
+    for chunk_tokens in chunk_sizes:
+        x, y = train_loader.next_batch(chunk_tokens, args.train_seq_len)
+        loss, grads = compiled_loss_and_grad(x, y)
+        scale = float(y.size) / total_tokens
+        loss_value = loss_value + loss.astype(mx.float32) * scale
+        grad_accum = accumulate_flat_grads(grad_accum, grads, scale)
+    return loss_value, tree_unflatten(list(grad_accum.items()))
+
+
+def eval_val(
+    args: Hyperparameters,
+    compiled_loss,
+    val_tokens: np.ndarray,
+    base_bytes_lut: np.ndarray,
+    has_leading_space_lut: np.ndarray,
+    is_boundary_token_lut: np.ndarray,
+    log_fn: Callable[[str], None] | None = None,
+) -> tuple[float, float]:
+    # Validation computes two metrics:
+    # - val_loss: token cross-entropy (natural log)
+    # - val_bpb: tokenizer-agnostic compression metric used by the challenge
+    val_batch_tokens = args.val_batch_size // args.grad_accum_steps
+    if val_batch_tokens < args.train_seq_len:
+        raise ValueError(
+            "VAL_BATCH_SIZE must provide at least one sequence; "
+            f"got VAL_BATCH_SIZE={args.val_batch_size}, GRAD_ACCUM_STEPS={args.grad_accum_steps}, "
+            f"TRAIN_SEQ_LEN={args.train_seq_len}"
+        )
+    val_batch_seqs = val_batch_tokens // args.train_seq_len
+    total_seqs = (val_tokens.size - 1) // args.train_seq_len
+    total_batches = max((total_seqs + val_batch_seqs - 1) // val_batch_seqs, 1)
+    total_loss_sum = 0.0
+    total_tokens = 0.0
+    total_bytes = 0.0
+    for batch_idx, batch_seq_start in enumerate(range(0, total_seqs, val_batch_seqs), start=1):
+        batch_seq_end = min(batch_seq_start + val_batch_seqs, total_seqs)
+        raw_start = batch_seq_start * args.train_seq_len
+        raw_end = batch_seq_end * args.train_seq_len + 1
+        chunk = val_tokens[raw_start:raw_end]
+        x_np = chunk[:-1].reshape(-1, args.train_seq_len)
+        y_np = chunk[1:].reshape(-1, args.train_seq_len)
+        x = mx.array(x_np, dtype=mx.int32)
+        y = mx.array(y_np, dtype=mx.int32)
+        chunk_token_count = float(y.size)
+        batch_loss = compiled_loss(x, y).astype(mx.float32)
+        mx.eval(batch_loss)
+        total_loss_sum += float(batch_loss.item()) * chunk_token_count
+        prev_ids = x_np.reshape(-1)
+        tgt_ids = y_np.reshape(-1)
+        bytes_np = base_bytes_lut[tgt_ids].astype(np.int16, copy=True)
+        bytes_np += (
+            has_leading_space_lut[tgt_ids] & ~is_boundary_token_lut[prev_ids]
+        ).astype(np.int16, copy=False)
+        total_tokens += chunk_token_count
+        total_bytes += float(bytes_np.astype(np.float64).sum())
+        if log_fn is not None and total_batches > 1 and (
+            batch_idx == 1 or batch_idx == total_batches or batch_idx % 25 == 0
+        ):
+            log_fn(f"val_progress:{batch_idx}/{total_batches}")
+    val_loss = total_loss_sum / total_tokens
+    bits_per_token = val_loss / math.log(2.0)
+    val_bpb = bits_per_token * (total_tokens / total_bytes)
+    return val_loss, val_bpb
+
+# -----------------------------
+# TRAINING
+# -----------------------------
+
+def clip_grad_tree(grads_tree: dict, max_norm: float) -> dict:
+    if max_norm <= 0:
+        return grads_tree
+    flat = dict(tree_flatten(grads_tree))
+    total_sq = 0.0
+    for grad in flat.values():
+        total_sq += float(np.sum(np.square(_np_float32(grad)), dtype=np.float64))
+    if total_sq <= 0.0:
+        return grads_tree
+    total_norm = math.sqrt(total_sq)
+    if total_norm <= max_norm:
+        return grads_tree
+    scale = max_norm / (total_norm + 1e-12)
+    return tree_unflatten([(k, g * scale) for k, g in flat.items()])
+
+
+def main() -> None:
+    # ==============================================================================
+    # TOKENIZER + VALIDATION METRIC SETUP
+    # ==============================================================================
+    args = Hyperparameters()
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logfile = out_dir / f"{args.run_id}.txt"
+    print(logfile)
+
+    def log(msg: str, console: bool = True) -> None:
+        if console:
+            print(msg)
+        with logfile.open("a", encoding="utf-8") as f:
+            print(msg, file=f)
+
+    code_path = Path(__file__)
+    code = code_path.read_text(encoding="utf-8")
+    code_bytes = len(code.encode("utf-8"))
+    log(code, console=False)
+    log("=" * 100, console=False)
+    log(f"Running Python {sys.version}", console=False)
+    log(f"Running MLX {mx.__version__}", console=False)
+    log(f"code_bytes:{code_bytes}", console=False)
+    log("=" * 100, console=False)
+
+    if not args.tie_embeddings:
+        raise NotImplementedError("train_gpt_mlx.py only supports tied embeddings")
+    if not args.tokenizer_path.endswith(".model"):
+        raise ValueError(f"TOKENIZER_PATH must point to a SentencePiece .model file: {args.tokenizer_path}")
+    sp = spm.SentencePieceProcessor(model_file=args.tokenizer_path)
+    if int(sp.vocab_size()) != args.vocab_size:
+        raise ValueError(
+            f"VOCAB_SIZE={args.vocab_size} does not match tokenizer vocab_size={int(sp.vocab_size())}"
+        )
+    dataset_name, actual_train_files, expected_train_files = validate_dataset_tokenizer_pair(
+        args.data_path,
+        args.tokenizer_path,
+    )
+    val_tokens, selected_val_seqs, total_val_seqs = select_validation_tokens(
+        load_validation_tokens(args.val_files, args.train_seq_len),
+        args.train_seq_len,
+        args.val_subset_seqs,
+    )
+
+    base_bytes_lut, has_leading_space_lut, is_boundary_token_lut = build_sentencepiece_luts(
+        sp, args.vocab_size
+    )
+
+    # ==============================================================================
+    # TRAINING SETUP
+    # ==============================================================================
+    mx.random.seed(args.seed)
+
+    train_loader = TokenLoader(args.train_files, log_fn=log, dataset_name=dataset_name)
+
+    # ==============================================================================
+    # MODEL + OPTIMIZER SETUP
+    # ==============================================================================
+    model = GPT(
+        vocab_size=args.vocab_size,
+        num_layers=args.num_layers,
+        dim=args.model_dim,
+        num_heads=args.num_heads,
+        num_kv_heads=args.num_kv_heads,
+        mlp_mult=args.mlp_mult,
+        logit_chunk_tokens=args.logit_chunk_tokens,
+        logit_softcap=args.logit_softcap,
+        rope_base=args.rope_base,
+        tied_embed_init_std=args.tied_embed_init_std,
+        qk_gain_init=args.qk_gain_init,
+    )
+    opt = SplitOptimizers(model, args)
+
+    # ==============================================================================
+    # COMPILED TRAIN / EVAL FUNCTIONS (MLX)
+    # ==============================================================================
+    # The crucial MLX detail is capture scope: this model contains non-trainable arrays too (for example
+    # inside RoPE modules), so compiling only against trainable parameters throws "uncaptured inputs".
+    # Compiling the model-bound functions and capturing the full model state fixes that while still
+    # returning gradients only for trainable parameters via nn.value_and_grad(...).
+    compiled_loss = mx.compile(lambda x, y: model.loss(x, y), inputs=model.state, outputs=model.state)
+    compiled_loss_and_grad = mx.compile(
+        nn.value_and_grad(model, lambda x, y: model.loss(x, y)),
+        inputs=model.state,
+        outputs=model.state,
+    )
+
+    # Print config once so logs are self-describing.
+    n_params = sum(int(np.prod(p.shape)) for _, p in tree_flatten(model.parameters()))
+    log(f"run_id:{args.run_id}")
+    log(f"mlx_version:{mx.__version__}")
+    log(f"train_loader:shards pattern={args.train_files}")
+    log(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.size - 1}")
+    if selected_val_seqs < total_val_seqs:
+        log(
+            f"val_loader:subset mode=prefix seqs:{selected_val_seqs}/{total_val_seqs} "
+            f"tokens:{val_tokens.size - 1}"
+        )
+    else:
+        log(f"val_loader:subset mode=full seqs:{selected_val_seqs}/{total_val_seqs}")
+    if expected_train_files is None:
+        log(f"train_loader:dataset:{dataset_name} train_shards:{actual_train_files}")
+    elif actual_train_files < expected_train_files:
+        log(
+            f"WARNING: train_loader:subset dataset:{dataset_name} "
+            f"train_shards:{actual_train_files}/{expected_train_files} "
+            f"new epochs will arrive sooner than the full dataset"
+        )
+    else:
+        log(f"train_loader:dataset:{dataset_name} train_shards:{actual_train_files}/{expected_train_files}")
+    log(f"tokenizer_path:{args.tokenizer_path}")
+    log(
+        f"model_params:{n_params} vocab_size:{args.vocab_size} layers:{args.num_layers} "
+        f"dim:{args.model_dim} heads:{args.num_heads} kv_heads:{args.num_kv_heads} "
+        f"seq_len:{args.train_seq_len} tie_embeddings:{args.tie_embeddings}"
+    )
+    log(
+        f"iterations:{args.iterations} train_batch_tokens:{args.train_batch_tokens} grad_accum_steps:{args.grad_accum_steps} "
+        f"microbatch_tokens:{args.microbatch_tokens} microbatch_batch_size:{args.microbatch_tokens // args.train_seq_len} "
+        f"val_batch_size:{args.val_batch_size} "
+        f"warmup_steps:{args.warmup_steps} max_wallclock_seconds:{args.max_wallclock_seconds:.3f}"
+    )
+    log(f"mlx_max_microbatch_tokens:{args.mlx_max_microbatch_tokens}")
+    log(
+        f"optimizer:muon+adam muon_matrix_params:{len(opt.matrix_keys)} scalar_params:{len(opt.scalar_keys)} "
+        f"embed_lr:{args.tied_embed_lr} "
+        f"matrix_lr:{args.matrix_lr} scalar_lr:{args.scalar_lr} "
+        f"muon_momentum:{args.muon_momentum} muon_steps:{args.muon_backend_steps}"
+    )
+    log(f"val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path={args.tokenizer_path}")
+    log(f"compute_dtype:{COMPUTE_DTYPE} compile:True")
+    log(
+        f"dtypes tok_emb:{model.tok_emb.weight.dtype} "
+        f"linear_weight:{model.blocks[0].attn.c_q.weight.dtype} "
+        f"skip_weights:{model.skip_weights.dtype}"
+    )
+    tied_head_mode = (
+        f"int{signed_qmax_to_bits(INT8_HEAD_QMAX)}"
+        if QUANTIZE_TIED_HEAD
+        else "fp16"
+    )
+    log(
+        f"quant_config body_qmax:{INT8_RTN_QMAX} body_bits:{signed_qmax_to_bits(INT8_RTN_QMAX)} "
+        f"group_size:{INT8_PER_ROW_GROUP_SIZE} tied_head_mode:{tied_head_mode} codec:lzma "
+        f"quant_method:{QUANT_METHOD} input_rotation:{INPUT_ROTATION} scalar_quantizer:{SCALAR_QUANTIZER} "
+        f"sparse_residual_frac:{SPARSE_RESIDUAL_FRAC:.6f} "
+        f"lowrank_residual_rank:{LOWRANK_RESIDUAL_RANK} lowrank_residual_mode:{LOWRANK_RESIDUAL_MODE}"
+    )
+    log(
+        f"awq_config enabled:{int(AWQ_ENABLED)} calib_seqs:{AWQ_CALIBRATION_SEQS} "
+        f"calib_batch_tokens:{AWQ_CALIBRATION_BATCH_TOKENS} scale_tied_head:{int(AWQ_SCALE_TIED_HEAD)} "
+        f"alpha_grid:{','.join(f'{alpha:.2f}' for alpha in AWQ_ALPHA_GRID)} "
+        f"max_scale:{AWQ_MAX_SCALE:.2f} "
+        f"include:{','.join(AWQ_INCLUDE_NAME_PATTERNS) if AWQ_INCLUDE_NAME_PATTERNS else '<all>'} "
+        f"exclude:{','.join(AWQ_EXCLUDE_NAME_PATTERNS) if AWQ_EXCLUDE_NAME_PATTERNS else '<none>'}"
+    )
+    log(
+        f"gptq_config enabled:{int(GPTQ_ENABLED)} calib_seqs:{GPTQ_CALIBRATION_SEQS} "
+        f"calib_batch_tokens:{GPTQ_CALIBRATION_BATCH_TOKENS} hessian_group_size:{GPTQ_HESSIAN_GROUP_SIZE} "
+        f"max_rows_per_observe:{GPTQ_MAX_ROWS_PER_OBSERVE} damp_percent:{GPTQ_DAMP_PERCENT:.4f} "
+        f"act_order:{int(GPTQ_ACT_ORDER)}"
+    )
+    log(
+        f"lowrank_config enabled:{int(lowrank_residual_enabled())} rank:{LOWRANK_RESIDUAL_RANK} "
+        f"mode:{LOWRANK_RESIDUAL_MODE} calib_seqs:{LOWRANK_CALIBRATION_SEQS} "
+        f"calib_batch_tokens:{LOWRANK_CALIBRATION_BATCH_TOKENS}"
+    )
+
+    # ==============================================================================
+    # TRAINING LOOP
+    # ==============================================================================
+    if args.warmup_steps > 0:
+        # Warmup should only prime MLX compile/allocation paths. Updating parameters here forces us
+        # to snapshot and restore model/optimizer state, which is expensive on unified-memory Macs.
+        # Instead we run the real train shapes, force the loss/grads to materialize, and then reset
+        # the loader so measured training still starts from the true init and token window.
+        for warmup_step in range(args.warmup_steps):
+            accum: dict[str, mx.array] | None = None
+            warmup_loss = mx.array(0.0, dtype=mx.float32)
+            grad_scale = 1.0 / args.grad_accum_steps
+            for _ in range(args.grad_accum_steps):
+                warmup_loss, grads = loss_and_grad_chunked(args, train_loader, compiled_loss_and_grad)
+                accum = accumulate_flat_grads(accum, grads, grad_scale)
+            mx.eval(warmup_loss, accum)
+            mx.synchronize()
+            if args.warmup_steps <= 20 or (warmup_step + 1) % 10 == 0 or warmup_step + 1 == args.warmup_steps:
+                log(f"warmup_step:{warmup_step + 1}/{args.warmup_steps}")
+
+        # Prime the standalone eval graph once too. It is compiled separately from value_and_grad.
+        val_batch_tokens = args.val_batch_size // args.grad_accum_steps
+        if val_batch_tokens < args.train_seq_len:
+            raise ValueError(
+                "VAL_BATCH_SIZE must provide at least one sequence; "
+                f"got VAL_BATCH_SIZE={args.val_batch_size}, GRAD_ACCUM_STEPS={args.grad_accum_steps}, "
+                f"TRAIN_SEQ_LEN={args.train_seq_len}"
+            )
+        warm_val_seqs = min(val_batch_tokens // args.train_seq_len, (val_tokens.size - 1) // args.train_seq_len)
+        warm_chunk = val_tokens[: warm_val_seqs * args.train_seq_len + 1]
+        x_val = mx.array(warm_chunk[:-1].reshape(-1, args.train_seq_len), dtype=mx.int32)
+        y_val = mx.array(warm_chunk[1:].reshape(-1, args.train_seq_len), dtype=mx.int32)
+        warm_val_loss = compiled_loss(x_val, y_val)
+        mx.eval(warm_val_loss)
+        mx.synchronize()
+
+        train_loader = TokenLoader(args.train_files, log_fn=log, dataset_name=dataset_name)
+
+    train_time_ms = 0.0
+    max_wallclock_ms = 1000.0 * args.max_wallclock_seconds if args.max_wallclock_seconds > 0 else None
+    stop_after_step: int | None = None
+    t0 = time.perf_counter()
+    step = 0
+    while True:
+        last_step = step == args.iterations or (stop_after_step is not None and step >= stop_after_step)
+        should_run_periodic_val = args.val_loss_every > 0 and step % args.val_loss_every == 0 and not last_step
+        should_run_final_float_val = last_step and not args.skip_final_float_val
+        if last_step or should_run_periodic_val:
+            train_time_ms += 1000.0 * (time.perf_counter() - t0)
+            if should_run_periodic_val or should_run_final_float_val:
+                # Validation always scans the same fixed token prefix selected at startup.
+                val_loss, val_bpb = eval_val(
+                    args,
+                    compiled_loss,
+                    val_tokens,
+                    base_bytes_lut,
+                    has_leading_space_lut,
+                    is_boundary_token_lut,
+                    log_fn=log,
+                )
+                if step % 25 == 0 or last_step:
+                    log(
+                        f"step:{step}/{args.iterations} val_loss:{val_loss:.4f} val_bpb:{val_bpb:.4f} "
+                        f"train_time:{train_time_ms:.0f}ms step_avg:{train_time_ms / max(step, 1):.2f}ms"
+                    )
+            elif last_step:
+                log(f"skipping_final_float_val:1 train_time:{train_time_ms:.0f}ms step:{step}/{args.iterations}")
+            t0 = time.perf_counter()
+        if last_step:
+            if stop_after_step is not None and step < args.iterations:
+                log(f"stopping_early: wallclock_cap train_time:{train_time_ms:.0f}ms step:{step}/{args.iterations}")
+            break
+
+        lr_mul = args.lr_mul(step, train_time_ms + 1000.0 * (time.perf_counter() - t0))
+        step_t0 = time.perf_counter()
+
+        accum: dict[str, mx.array] | None = None
+        train_loss = mx.array(0.0, dtype=mx.float32)
+        grad_scale = 1.0 / args.grad_accum_steps
+        for _ in range(args.grad_accum_steps):
+            loss, grads = loss_and_grad_chunked(args, train_loader, compiled_loss_and_grad)
+            accum = accumulate_flat_grads(accum, grads, grad_scale)
+            train_loss = train_loss + loss.astype(mx.float32) * grad_scale
+
+        grads = tree_unflatten(list(accum.items()))
+        grads = clip_grad_tree(grads, args.grad_clip_norm)
+        train_loss_value = float(train_loss.item())
+        opt.step(model, grads, step=step, lr_mul=lr_mul)
+        mx.synchronize()
+
+        step_ms = 1000.0 * (time.perf_counter() - step_t0)
+        approx_train_time_ms = train_time_ms + 1000.0 * (time.perf_counter() - t0)
+        tok_s = args.train_batch_tokens / (step_ms / 1000.0)
+        step += 1
+        if args.train_log_every > 0 and (step <= 10 or step % args.train_log_every == 0 or stop_after_step is not None):
+            log(
+                f"step:{step}/{args.iterations} train_loss:{train_loss_value:.4f} "
+                f"train_time:{approx_train_time_ms:.0f}ms step_avg:{approx_train_time_ms / step:.2f}ms tok_s:{tok_s:.0f}"
+            )
+        if max_wallclock_ms is not None and stop_after_step is None and approx_train_time_ms >= max_wallclock_ms:
+            stop_after_step = step
+
+    train_peak_rss = peak_rss_bytes()
+    log(f"train_peak_rss_bytes:{train_peak_rss} train_peak_rss:{format_bytes(train_peak_rss)}")
+
+    # ==============================================================================
+    # FINAL SERIALIZATION + QUANTIZED ROUNDTRIP EVAL
+    # ==============================================================================
+    # We always write a raw artifact and a quantized artifact, then validate the
+    # quantized roundtrip directly by loading the dequantized tensors back into the
+    # model and running one final validation pass.
+    out_path = out_dir / f"{args.run_id}_mlx_model.npz"
+    flat_state = {k: v for k, v in tree_flatten(model.state)}
+    mx.savez(str(out_path), **flat_state)
+    log(f"saved_model:{out_path} bytes:{out_path.stat().st_size}")
+
+    awq_activation_scales = collect_awq_activation_scales(
+        args,
+        model,
+        args.train_files,
+        dataset_name,
+        log_fn=log,
+    )
+    gptq_hessian_groups = collect_gptq_hessian_groups(
+        args,
+        model,
+        args.train_files,
+        dataset_name,
+        log_fn=log,
+    )
+    if AWQ_ENABLED:
+        log(f"awq_calibration_tensors:{len(awq_activation_scales)}")
+    if lowrank_needs_activation_scales():
+        log(f"lowrank_activation_tensors:{len(awq_activation_scales)}")
+    if GPTQ_ENABLED:
+        log(f"gptq_calibration_tensors:{len(gptq_hessian_groups)}")
+
+    quant_obj, quant_stats = quantize_state_dict_int8(
+        flat_state,
+        awq_activation_scales=awq_activation_scales,
+        gptq_hessian_groups=gptq_hessian_groups,
+        log_fn=log,
+    )
+    quant_raw = pickle.dumps(quant_obj, protocol=pickle.HIGHEST_PROTOCOL)
+    quant_blob = lzma.compress(quant_raw, preset=6)
+    quant_serialized_bytes = len(quant_raw)
+    quant_path = out_dir / f"{args.run_id}_mlx_model.int8.xz"
+    with quant_path.open("wb") as f:
+        f.write(quant_blob)
+    quant_file_bytes = quant_path.stat().st_size
+    ratio = quant_stats["baseline_tensor_bytes"] / max(quant_stats["int8_payload_bytes"], 1)
+    log(
+        f"serialized_model_int8_zlib:{quant_file_bytes} bytes "
+        f"(codec:lzma payload:{quant_stats['int8_payload_bytes']} raw_pickle:{quant_serialized_bytes} "
+        f"payload_ratio:{ratio:.2f}x awq_tensors:{quant_stats['num_awq_tensors']} "
+        f"awq_scale_bytes:{quant_stats['awq_scale_bytes']} gptq_tensors:{quant_stats['num_gptq_tensors']} "
+        f"rotated_tensors:{quant_stats['num_rotated_tensors']} rotation_bytes:{quant_stats['rotation_bytes']} "
+        f"sparse_tensors:{quant_stats['num_sparse_residual_tensors']} "
+        f"sparse_values:{quant_stats['sparse_residual_values']} "
+        f"sparse_bytes:{quant_stats['sparse_residual_bytes']} "
+        f"lowrank_tensors:{quant_stats['num_lowrank_residual_tensors']} "
+        f"lowrank_rank_sum:{quant_stats['lowrank_residual_rank_sum']} "
+        f"lowrank_bytes:{quant_stats['lowrank_residual_bytes']})"
+    )
+    log(f"artifact_bytes_int8_zlib:{quant_file_bytes + code_bytes}")
+
+    with quant_path.open("rb") as f:
+        quant_blob_disk = f.read()
+    quant_flat = dequantize_state_dict_int8(pickle.loads(lzma.decompress(quant_blob_disk)))
+    model.update(tree_unflatten(list(quant_flat.items())))
+    q_t0 = time.perf_counter()
+    q_val_loss, q_val_bpb = eval_val(
+        args,
+        compiled_loss,
+        val_tokens,
+        base_bytes_lut,
+        has_leading_space_lut,
+        is_boundary_token_lut,
+        log_fn=log,
+    )
+    q_eval_ms = 1000.0 * (time.perf_counter() - q_t0)
+    log(f"final_int8_zlib_roundtrip val_loss:{q_val_loss:.4f} val_bpb:{q_val_bpb:.4f} eval_time:{q_eval_ms:.0f}ms")
+    log(f"final_int8_zlib_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+
+
+if __name__ == "__main__":
+    main()
+
+====================================================================================================
+Running Python 3.14.3 (main, Feb  3 2026, 15:32:20) [Clang 17.0.0 (clang-1700.6.3.2)]
+Running MLX 0.31.1
+code_bytes:91436
+====================================================================================================
+run_id:2026-03-30_mlx_quick_int5_group64_headint8_lzma_lowrankr1_val32768_skipfloat
+mlx_version:0.31.1
+train_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_train_*.bin
+val_loader:shards pattern=./data/datasets/fineweb10B_sp1024/fineweb_val_*.bin tokens:33554432
+val_loader:subset mode=prefix seqs:32768/60568 tokens:33554432
+WARNING: train_loader:subset dataset:fineweb10B_sp1024 train_shards:10/195 new epochs will arrive sooner than the full dataset
+tokenizer_path:./data/tokenizers/fineweb_1024_bpe.model
+model_params:17059912 vocab_size:1024 layers:9 dim:512 heads:8 kv_heads:4 seq_len:1024 tie_embeddings:True
+iterations:20000 train_batch_tokens:8192 grad_accum_steps:8 microbatch_tokens:1024 microbatch_batch_size:1 val_batch_size:8192 warmup_steps:20 max_wallclock_seconds:600.000
+mlx_max_microbatch_tokens:8192
+optimizer:muon+adam muon_matrix_params:54 scalar_params:37 embed_lr:0.05 matrix_lr:0.04 scalar_lr:0.04 muon_momentum:0.95 muon_steps:5
+val_bpb:enabled tokenizer_kind=sentencepiece tokenizer_path=./data/tokenizers/fineweb_1024_bpe.model
+compute_dtype:mlx.core.bfloat16 compile:True
+dtypes tok_emb:mlx.core.bfloat16 linear_weight:mlx.core.float32 skip_weights:mlx.core.float32
+quant_config body_qmax:15 body_bits:5 group_size:64 tied_head_mode:int8 codec:lzma quant_method:rtn input_rotation:none scalar_quantizer:uniform sparse_residual_frac:0.000000 lowrank_residual_rank:1 lowrank_residual_mode:plain
+awq_config enabled:0 calib_seqs:128 calib_batch_tokens:8192 scale_tied_head:0 alpha_grid:0.00,0.25,0.50,0.75,1.00 max_scale:8.00 include:<all> exclude:<none>
+gptq_config enabled:0 calib_seqs:128 calib_batch_tokens:8192 hessian_group_size:64 max_rows_per_observe:64 damp_percent:0.0100 act_order:1
+lowrank_config enabled:1 rank:1 mode:plain calib_seqs:128 calib_batch_tokens:8192
+warmup_step:1/20
+warmup_step:2/20
+warmup_step:3/20
+warmup_step:4/20
+warmup_step:5/20
+warmup_step:6/20
+warmup_step:7/20
+warmup_step:8/20
+warmup_step:9/20
+warmup_step:10/20
+warmup_step:11/20
+warmup_step:12/20
+warmup_step:13/20
+warmup_step:14/20
+warmup_step:15/20
+warmup_step:16/20
+warmup_step:17/20
+warmup_step:18/20
+warmup_step:19/20
+warmup_step:20/20
+step:1/20000 train_loss:6.9428 train_time:140ms step_avg:139.98ms tok_s:58527
+step:2/20000 train_loss:18.7861 train_time:601ms step_avg:300.41ms tok_s:17784
+step:3/20000 train_loss:14.4116 train_time:1055ms step_avg:351.56ms tok_s:18058
+step:4/20000 train_loss:10.0932 train_time:1507ms step_avg:376.87ms tok_s:18100
+step:5/20000 train_loss:7.8009 train_time:1960ms step_avg:392.05ms tok_s:18103
+step:6/20000 train_loss:6.9973 train_time:2415ms step_avg:402.45ms tok_s:18035
+step:7/20000 train_loss:6.7287 train_time:2867ms step_avg:409.59ms tok_s:18114
+step:8/20000 train_loss:6.6824 train_time:3321ms step_avg:415.16ms tok_s:18047
+step:9/20000 train_loss:6.5272 train_time:3775ms step_avg:419.42ms tok_s:18073
+step:10/20000 train_loss:6.3779 train_time:4230ms step_avg:422.97ms tok_s:18015
+step:200/20000 train_loss:3.9095 train_time:90610ms step_avg:453.05ms tok_s:18036
+step:400/20000 train_loss:3.6285 train_time:181397ms step_avg:453.49ms tok_s:18089
+step:600/20000 train_loss:3.5048 train_time:272239ms step_avg:453.73ms tok_s:17948
+step:800/20000 train_loss:3.3957 train_time:363024ms step_avg:453.78ms tok_s:18051
+step:1000/20000 train_loss:3.3490 train_time:453886ms step_avg:453.89ms tok_s:18097
+step:1200/20000 train_loss:3.2169 train_time:544648ms step_avg:453.87ms tok_s:18125
+skipping_final_float_val:1 train_time:600050ms step:1322/20000
+stopping_early: wallclock_cap train_time:600050ms step:1322/20000
+train_peak_rss_bytes:1542586368 train_peak_rss:1.44GiB
+saved_model:/Users/jeebho01/parameter-golf/research/2026-03-30_mlx_quick_int5_group64_headint8_lzma_lowrankr1_val32768_skipfloat/2026-03-30_mlx_quick_int5_group64_headint8_lzma_lowrankr1_val32768_skipfloat_mlx_model.npz bytes:67212188
+serialized_model_int8_zlib:6978196 bytes (codec:lzma payload:17776928 raw_pickle:17793049 payload_ratio:3.78x awq_tensors:0 awq_scale_bytes:0 gptq_tensors:0 rotated_tensors:0 rotation_bytes:0 sparse_tensors:0 sparse_values:0 sparse_bytes:0 lowrank_tensors:55 lowrank_rank_sum:55 lowrank_bytes:122880)
+artifact_bytes_int8_zlib:7069632
+val_progress:1/32768
+val_progress:25/32768
+val_progress:50/32768
+val_progress:75/32768
+val_progress:100/32768
+val_progress:125/32768
+val_progress:150/32768
+val_progress:175/32768
+val_progress:200/32768
+val_progress:225/32768
+val_progress:250/32768
+val_progress:275/32768
+val_progress:300/32768
+val_progress:325/32768
+val_progress:350/32768
+val_progress:375/32768
+val_progress:400/32768
+val_progress:425/32768
+val_progress:450/32768
+val_progress:475/32768
+val_progress:500/32768
+val_progress:525/32768
+val_progress:550/32768
+val_progress:575/32768
+val_progress:600/32768
+val_progress:625/32768
+val_progress:650/32768
+val_progress:675/32768
+val_progress:700/32768
+val_progress:725/32768
+val_progress:750/32768
+val_progress:775/32768
+val_progress:800/32768
+val_progress:825/32768
+val_progress:850/32768
+val_progress:875/32768
+val_progress:900/32768
+val_progress:925/32768
+val_progress:950/32768
+val_progress:975/32768
+val_progress:1000/32768
+val_progress:1025/32768
+val_progress:1050/32768
+val_progress:1075/32768
+val_progress:1100/32768
+val_progress:1125/32768
+val_progress:1150/32768
+val_progress:1175/32768
+val_progress:1200/32768
+val_progress:1225/32768
+val_progress:1250/32768
+val_progress:1275/32768
+val_progress:1300/32768
+val_progress:1325/32768
+val_progress:1350/32768
+val_progress:1375/32768
+val_progress:1400/32768
+val_progress:1425/32768
+val_progress:1450/32768
+val_progress:1475/32768
+val_progress:1500/32768
+val_progress:1525/32768
+val_progress:1550/32768
+val_progress:1575/32768
+val_progress:1600/32768
+val_progress:1625/32768
+val_progress:1650/32768
+val_progress:1675/32768
+val_progress:1700/32768
+val_progress:1725/32768
+val_progress:1750/32768
+val_progress:1775/32768
+val_progress:1800/32768
+val_progress:1825/32768
+val_progress:1850/32768
+val_progress:1875/32768
+val_progress:1900/32768
+val_progress:1925/32768
+val_progress:1950/32768
+val_progress:1975/32768
+val_progress:2000/32768
+val_progress:2025/32768
+val_progress:2050/32768
+val_progress:2075/32768
+val_progress:2100/32768
+val_progress:2125/32768
+val_progress:2150/32768
+val_progress:2175/32768
+val_progress:2200/32768
+val_progress:2225/32768
+val_progress:2250/32768
+val_progress:2275/32768
+val_progress:2300/32768
+val_progress:2325/32768
+val_progress:2350/32768
+val_progress:2375/32768
+val_progress:2400/32768
+val_progress:2425/32768
+val_progress:2450/32768
+val_progress:2475/32768
+val_progress:2500/32768
+val_progress:2525/32768
+val_progress:2550/32768
+val_progress:2575/32768
+val_progress:2600/32768
+val_progress:2625/32768
+val_progress:2650/32768
+val_progress:2675/32768
+val_progress:2700/32768
+val_progress:2725/32768
+val_progress:2750/32768
+val_progress:2775/32768
+val_progress:2800/32768
+val_progress:2825/32768
+val_progress:2850/32768
+val_progress:2875/32768
+val_progress:2900/32768
+val_progress:2925/32768
+val_progress:2950/32768
+val_progress:2975/32768
+val_progress:3000/32768
+val_progress:3025/32768
+val_progress:3050/32768
+val_progress:3075/32768
+val_progress:3100/32768
+val_progress:3125/32768
+val_progress:3150/32768
+val_progress:3175/32768
+val_progress:3200/32768
+val_progress:3225/32768
+val_progress:3250/32768
+val_progress:3275/32768
+val_progress:3300/32768
+val_progress:3325/32768
+val_progress:3350/32768
+val_progress:3375/32768
+val_progress:3400/32768
+val_progress:3425/32768
+val_progress:3450/32768
+val_progress:3475/32768
+val_progress:3500/32768
+val_progress:3525/32768
+val_progress:3550/32768
+val_progress:3575/32768
+val_progress:3600/32768
+val_progress:3625/32768
+val_progress:3650/32768
+val_progress:3675/32768
+val_progress:3700/32768
+val_progress:3725/32768
+val_progress:3750/32768
+val_progress:3775/32768
+val_progress:3800/32768
+val_progress:3825/32768
+val_progress:3850/32768
+val_progress:3875/32768
+val_progress:3900/32768
+val_progress:3925/32768
+val_progress:3950/32768
+val_progress:3975/32768
+val_progress:4000/32768
+val_progress:4025/32768
+val_progress:4050/32768
+val_progress:4075/32768
+val_progress:4100/32768
+val_progress:4125/32768
+val_progress:4150/32768
+val_progress:4175/32768
+val_progress:4200/32768
+val_progress:4225/32768
+val_progress:4250/32768
+val_progress:4275/32768
+val_progress:4300/32768
+val_progress:4325/32768
+val_progress:4350/32768
+val_progress:4375/32768
+val_progress:4400/32768
+val_progress:4425/32768
+val_progress:4450/32768
+val_progress:4475/32768
+val_progress:4500/32768
+val_progress:4525/32768
+val_progress:4550/32768
+val_progress:4575/32768
+val_progress:4600/32768
+val_progress:4625/32768
+val_progress:4650/32768
+val_progress:4675/32768
+val_progress:4700/32768
+val_progress:4725/32768
+val_progress:4750/32768
+val_progress:4775/32768
+val_progress:4800/32768
+val_progress:4825/32768
+val_progress:4850/32768
+val_progress:4875/32768
+val_progress:4900/32768
+val_progress:4925/32768
+val_progress:4950/32768
+val_progress:4975/32768
+val_progress:5000/32768
+val_progress:5025/32768
+val_progress:5050/32768
+val_progress:5075/32768
+val_progress:5100/32768
+val_progress:5125/32768
+val_progress:5150/32768
+val_progress:5175/32768
+val_progress:5200/32768
+val_progress:5225/32768
+val_progress:5250/32768
+val_progress:5275/32768
+val_progress:5300/32768
+val_progress:5325/32768
+val_progress:5350/32768
+val_progress:5375/32768
+val_progress:5400/32768
+val_progress:5425/32768
+val_progress:5450/32768
+val_progress:5475/32768
+val_progress:5500/32768
+val_progress:5525/32768
+val_progress:5550/32768
+val_progress:5575/32768
+val_progress:5600/32768
+val_progress:5625/32768
+val_progress:5650/32768
+val_progress:5675/32768
+val_progress:5700/32768
+val_progress:5725/32768
+val_progress:5750/32768
+val_progress:5775/32768
+val_progress:5800/32768
+val_progress:5825/32768
+val_progress:5850/32768
+val_progress:5875/32768
+val_progress:5900/32768
+val_progress:5925/32768
+val_progress:5950/32768
+val_progress:5975/32768
+val_progress:6000/32768
+val_progress:6025/32768
+val_progress:6050/32768
+val_progress:6075/32768
+val_progress:6100/32768
+val_progress:6125/32768
+val_progress:6150/32768
+val_progress:6175/32768
+val_progress:6200/32768
+val_progress:6225/32768
+val_progress:6250/32768
+val_progress:6275/32768
+val_progress:6300/32768
+val_progress:6325/32768
+val_progress:6350/32768
+val_progress:6375/32768
+val_progress:6400/32768
+val_progress:6425/32768
+val_progress:6450/32768
+val_progress:6475/32768
+val_progress:6500/32768
+val_progress:6525/32768
+val_progress:6550/32768
+val_progress:6575/32768
+val_progress:6600/32768
+val_progress:6625/32768
+val_progress:6650/32768
+val_progress:6675/32768
+val_progress:6700/32768
+val_progress:6725/32768
+val_progress:6750/32768
+val_progress:6775/32768
+val_progress:6800/32768
+val_progress:6825/32768
+val_progress:6850/32768
+val_progress:6875/32768
+val_progress:6900/32768
+val_progress:6925/32768
+val_progress:6950/32768
+val_progress:6975/32768
+val_progress:7000/32768
+val_progress:7025/32768
+val_progress:7050/32768
+val_progress:7075/32768
+val_progress:7100/32768
+val_progress:7125/32768
+val_progress:7150/32768
+val_progress:7175/32768
+val_progress:7200/32768
+val_progress:7225/32768
+val_progress:7250/32768
+val_progress:7275/32768
+val_progress:7300/32768
+val_progress:7325/32768
+val_progress:7350/32768
+val_progress:7375/32768
+val_progress:7400/32768
+val_progress:7425/32768
+val_progress:7450/32768
+val_progress:7475/32768
+val_progress:7500/32768
+val_progress:7525/32768
+val_progress:7550/32768
+val_progress:7575/32768
+val_progress:7600/32768
+val_progress:7625/32768
+val_progress:7650/32768
+val_progress:7675/32768
+val_progress:7700/32768
+val_progress:7725/32768
+val_progress:7750/32768
+val_progress:7775/32768
+val_progress:7800/32768
+val_progress:7825/32768
+val_progress:7850/32768
+val_progress:7875/32768
+val_progress:7900/32768
+val_progress:7925/32768
+val_progress:7950/32768
+val_progress:7975/32768
+val_progress:8000/32768
+val_progress:8025/32768
+val_progress:8050/32768
+val_progress:8075/32768
+val_progress:8100/32768
+val_progress:8125/32768
+val_progress:8150/32768
+val_progress:8175/32768
+val_progress:8200/32768
+val_progress:8225/32768
+val_progress:8250/32768
+val_progress:8275/32768
+val_progress:8300/32768
+val_progress:8325/32768
+val_progress:8350/32768
+val_progress:8375/32768
+val_progress:8400/32768
+val_progress:8425/32768
+val_progress:8450/32768
+val_progress:8475/32768
+val_progress:8500/32768
+val_progress:8525/32768
+val_progress:8550/32768
+val_progress:8575/32768
+val_progress:8600/32768
+val_progress:8625/32768
+val_progress:8650/32768
+val_progress:8675/32768
+val_progress:8700/32768
+val_progress:8725/32768
+val_progress:8750/32768
+val_progress:8775/32768
+val_progress:8800/32768
+val_progress:8825/32768
+val_progress:8850/32768
+val_progress:8875/32768
+val_progress:8900/32768
+val_progress:8925/32768
+val_progress:8950/32768
+val_progress:8975/32768
+val_progress:9000/32768
+val_progress:9025/32768
+val_progress:9050/32768
+val_progress:9075/32768
+val_progress:9100/32768
+val_progress:9125/32768
+val_progress:9150/32768
+val_progress:9175/32768
+val_progress:9200/32768
+val_progress:9225/32768
+val_progress:9250/32768
+val_progress:9275/32768
+val_progress:9300/32768
+val_progress:9325/32768
+val_progress:9350/32768
+val_progress:9375/32768
+val_progress:9400/32768
+val_progress:9425/32768
+val_progress:9450/32768
+val_progress:9475/32768
+val_progress:9500/32768
+val_progress:9525/32768
+val_progress:9550/32768
+val_progress:9575/32768
+val_progress:9600/32768
+val_progress:9625/32768
+val_progress:9650/32768
+val_progress:9675/32768
+val_progress:9700/32768
+val_progress:9725/32768
+val_progress:9750/32768
+val_progress:9775/32768
+val_progress:9800/32768
+val_progress:9825/32768
+val_progress:9850/32768
+val_progress:9875/32768
+val_progress:9900/32768
+val_progress:9925/32768
+val_progress:9950/32768
+val_progress:9975/32768
+val_progress:10000/32768
+val_progress:10025/32768
+val_progress:10050/32768
+val_progress:10075/32768
+val_progress:10100/32768
+val_progress:10125/32768
+val_progress:10150/32768
+val_progress:10175/32768
+val_progress:10200/32768
+val_progress:10225/32768
+val_progress:10250/32768
+val_progress:10275/32768
+val_progress:10300/32768
+val_progress:10325/32768
+val_progress:10350/32768
+val_progress:10375/32768
+val_progress:10400/32768
+val_progress:10425/32768
+val_progress:10450/32768
+val_progress:10475/32768
+val_progress:10500/32768
+val_progress:10525/32768
+val_progress:10550/32768
+val_progress:10575/32768
+val_progress:10600/32768
+val_progress:10625/32768
+val_progress:10650/32768
+val_progress:10675/32768
+val_progress:10700/32768
+val_progress:10725/32768
+val_progress:10750/32768
+val_progress:10775/32768
+val_progress:10800/32768
+val_progress:10825/32768
+val_progress:10850/32768
+val_progress:10875/32768
+val_progress:10900/32768
+val_progress:10925/32768
+val_progress:10950/32768
+val_progress:10975/32768
+val_progress:11000/32768
+val_progress:11025/32768
+val_progress:11050/32768
+val_progress:11075/32768
+val_progress:11100/32768
+val_progress:11125/32768
+val_progress:11150/32768
+val_progress:11175/32768
+val_progress:11200/32768
+val_progress:11225/32768
+val_progress:11250/32768
+val_progress:11275/32768
+val_progress:11300/32768
+val_progress:11325/32768
+val_progress:11350/32768
+val_progress:11375/32768
+val_progress:11400/32768
+val_progress:11425/32768
+val_progress:11450/32768
+val_progress:11475/32768
+val_progress:11500/32768
+val_progress:11525/32768
+val_progress:11550/32768
+val_progress:11575/32768
+val_progress:11600/32768
+val_progress:11625/32768
+val_progress:11650/32768
+val_progress:11675/32768
+val_progress:11700/32768
+val_progress:11725/32768
+val_progress:11750/32768
+val_progress:11775/32768
+val_progress:11800/32768
+val_progress:11825/32768
+val_progress:11850/32768
+val_progress:11875/32768
+val_progress:11900/32768
+val_progress:11925/32768
+val_progress:11950/32768
+val_progress:11975/32768
+val_progress:12000/32768
+val_progress:12025/32768
+val_progress:12050/32768
+val_progress:12075/32768
+val_progress:12100/32768
+val_progress:12125/32768
+val_progress:12150/32768
+val_progress:12175/32768
+val_progress:12200/32768
+val_progress:12225/32768
+val_progress:12250/32768
+val_progress:12275/32768
+val_progress:12300/32768
+val_progress:12325/32768
+val_progress:12350/32768
+val_progress:12375/32768
+val_progress:12400/32768
+val_progress:12425/32768
+val_progress:12450/32768
+val_progress:12475/32768
+val_progress:12500/32768
+val_progress:12525/32768
+val_progress:12550/32768
+val_progress:12575/32768
+val_progress:12600/32768
+val_progress:12625/32768
+val_progress:12650/32768
+val_progress:12675/32768
+val_progress:12700/32768
+val_progress:12725/32768
+val_progress:12750/32768
+val_progress:12775/32768
+val_progress:12800/32768
+val_progress:12825/32768
+val_progress:12850/32768
+val_progress:12875/32768
+val_progress:12900/32768
+val_progress:12925/32768
+val_progress:12950/32768
+val_progress:12975/32768
+val_progress:13000/32768
+val_progress:13025/32768
+val_progress:13050/32768
+val_progress:13075/32768
+val_progress:13100/32768
+val_progress:13125/32768
+val_progress:13150/32768
+val_progress:13175/32768
+val_progress:13200/32768
+val_progress:13225/32768
+val_progress:13250/32768
+val_progress:13275/32768
+val_progress:13300/32768
+val_progress:13325/32768
+val_progress:13350/32768
+val_progress:13375/32768
+val_progress:13400/32768
+val_progress:13425/32768
+val_progress:13450/32768
+val_progress:13475/32768
+val_progress:13500/32768
+val_progress:13525/32768
+val_progress:13550/32768
+val_progress:13575/32768
+val_progress:13600/32768
+val_progress:13625/32768
+val_progress:13650/32768
+val_progress:13675/32768
+val_progress:13700/32768
+val_progress:13725/32768
+val_progress:13750/32768
+val_progress:13775/32768
+val_progress:13800/32768
+val_progress:13825/32768
+val_progress:13850/32768
+val_progress:13875/32768
+val_progress:13900/32768
+val_progress:13925/32768
+val_progress:13950/32768
+val_progress:13975/32768
+val_progress:14000/32768
+val_progress:14025/32768
+val_progress:14050/32768
+val_progress:14075/32768
+val_progress:14100/32768
+val_progress:14125/32768
+val_progress:14150/32768
+val_progress:14175/32768
+val_progress:14200/32768
+val_progress:14225/32768
+val_progress:14250/32768
+val_progress:14275/32768
+val_progress:14300/32768
+val_progress:14325/32768
+val_progress:14350/32768
+val_progress:14375/32768
+val_progress:14400/32768
+val_progress:14425/32768
+val_progress:14450/32768
+val_progress:14475/32768
+val_progress:14500/32768
+val_progress:14525/32768
+val_progress:14550/32768
+val_progress:14575/32768
+val_progress:14600/32768
+val_progress:14625/32768
+val_progress:14650/32768
+val_progress:14675/32768
+val_progress:14700/32768
+val_progress:14725/32768
+val_progress:14750/32768
+val_progress:14775/32768
+val_progress:14800/32768
+val_progress:14825/32768
+val_progress:14850/32768
+val_progress:14875/32768
+val_progress:14900/32768
+val_progress:14925/32768
+val_progress:14950/32768
+val_progress:14975/32768
+val_progress:15000/32768
+val_progress:15025/32768
+val_progress:15050/32768
+val_progress:15075/32768
+val_progress:15100/32768
+val_progress:15125/32768
+val_progress:15150/32768
+val_progress:15175/32768
+val_progress:15200/32768
+val_progress:15225/32768
+val_progress:15250/32768
+val_progress:15275/32768
+val_progress:15300/32768
+val_progress:15325/32768
+val_progress:15350/32768
+val_progress:15375/32768
+val_progress:15400/32768
+val_progress:15425/32768
+val_progress:15450/32768
+val_progress:15475/32768
+val_progress:15500/32768
+val_progress:15525/32768
+val_progress:15550/32768
+val_progress:15575/32768
+val_progress:15600/32768
+val_progress:15625/32768
+val_progress:15650/32768
+val_progress:15675/32768
+val_progress:15700/32768
+val_progress:15725/32768
+val_progress:15750/32768
+val_progress:15775/32768
+val_progress:15800/32768
+val_progress:15825/32768
+val_progress:15850/32768
+val_progress:15875/32768
+val_progress:15900/32768
+val_progress:15925/32768
+val_progress:15950/32768
+val_progress:15975/32768
+val_progress:16000/32768
+val_progress:16025/32768
+val_progress:16050/32768
+val_progress:16075/32768
+val_progress:16100/32768
+val_progress:16125/32768
+val_progress:16150/32768
+val_progress:16175/32768
+val_progress:16200/32768
+val_progress:16225/32768
+val_progress:16250/32768
+val_progress:16275/32768
+val_progress:16300/32768
+val_progress:16325/32768
+val_progress:16350/32768
+val_progress:16375/32768
+val_progress:16400/32768
+val_progress:16425/32768
+val_progress:16450/32768
+val_progress:16475/32768
+val_progress:16500/32768
+val_progress:16525/32768
+val_progress:16550/32768
+val_progress:16575/32768
+val_progress:16600/32768
+val_progress:16625/32768
+val_progress:16650/32768
+val_progress:16675/32768
+val_progress:16700/32768
+val_progress:16725/32768
+val_progress:16750/32768
+val_progress:16775/32768
+val_progress:16800/32768
+val_progress:16825/32768
+val_progress:16850/32768
+val_progress:16875/32768
+val_progress:16900/32768
+val_progress:16925/32768
+val_progress:16950/32768
+val_progress:16975/32768
+val_progress:17000/32768
+val_progress:17025/32768
+val_progress:17050/32768
+val_progress:17075/32768
+val_progress:17100/32768
+val_progress:17125/32768
+val_progress:17150/32768
+val_progress:17175/32768
+val_progress:17200/32768
+val_progress:17225/32768
+val_progress:17250/32768
+val_progress:17275/32768
+val_progress:17300/32768
+val_progress:17325/32768
+val_progress:17350/32768
+val_progress:17375/32768
+val_progress:17400/32768
+val_progress:17425/32768
+val_progress:17450/32768
+val_progress:17475/32768
+val_progress:17500/32768
+val_progress:17525/32768
+val_progress:17550/32768
+val_progress:17575/32768
+val_progress:17600/32768
+val_progress:17625/32768
+val_progress:17650/32768
+val_progress:17675/32768
+val_progress:17700/32768
+val_progress:17725/32768
+val_progress:17750/32768
+val_progress:17775/32768
+val_progress:17800/32768
+val_progress:17825/32768
+val_progress:17850/32768
+val_progress:17875/32768
+val_progress:17900/32768
+val_progress:17925/32768
+val_progress:17950/32768
+val_progress:17975/32768
+val_progress:18000/32768
+val_progress:18025/32768
+val_progress:18050/32768
+val_progress:18075/32768
+val_progress:18100/32768
+val_progress:18125/32768
+val_progress:18150/32768
+val_progress:18175/32768
+val_progress:18200/32768
+val_progress:18225/32768
+val_progress:18250/32768
+val_progress:18275/32768
+val_progress:18300/32768
+val_progress:18325/32768
+val_progress:18350/32768
+val_progress:18375/32768
+val_progress:18400/32768
+val_progress:18425/32768
+val_progress:18450/32768
+val_progress:18475/32768
+val_progress:18500/32768
+val_progress:18525/32768
+val_progress:18550/32768
+val_progress:18575/32768
+val_progress:18600/32768
+val_progress:18625/32768
+val_progress:18650/32768
+val_progress:18675/32768
+val_progress:18700/32768
+val_progress:18725/32768
+val_progress:18750/32768
+val_progress:18775/32768
+val_progress:18800/32768
+val_progress:18825/32768
+val_progress:18850/32768
+val_progress:18875/32768
+val_progress:18900/32768
+val_progress:18925/32768
+val_progress:18950/32768
+val_progress:18975/32768
+val_progress:19000/32768
+val_progress:19025/32768
+val_progress:19050/32768
+val_progress:19075/32768
+val_progress:19100/32768
+val_progress:19125/32768
+val_progress:19150/32768
+val_progress:19175/32768
+val_progress:19200/32768
+val_progress:19225/32768
+val_progress:19250/32768
+val_progress:19275/32768
+val_progress:19300/32768
+val_progress:19325/32768
+val_progress:19350/32768
+val_progress:19375/32768
+val_progress:19400/32768
+val_progress:19425/32768
+val_progress:19450/32768
+val_progress:19475/32768
+val_progress:19500/32768
+val_progress:19525/32768
+val_progress:19550/32768
+val_progress:19575/32768
+val_progress:19600/32768
+val_progress:19625/32768
+val_progress:19650/32768
+val_progress:19675/32768
+val_progress:19700/32768
+val_progress:19725/32768
+val_progress:19750/32768
+val_progress:19775/32768
+val_progress:19800/32768
+val_progress:19825/32768
+val_progress:19850/32768
+val_progress:19875/32768
+val_progress:19900/32768
+val_progress:19925/32768
+val_progress:19950/32768
+val_progress:19975/32768
+val_progress:20000/32768
+val_progress:20025/32768
+val_progress:20050/32768
+val_progress:20075/32768
+val_progress:20100/32768
+val_progress:20125/32768
+val_progress:20150/32768
+val_progress:20175/32768
+val_progress:20200/32768
+val_progress:20225/32768
+val_progress:20250/32768
+val_progress:20275/32768
+val_progress:20300/32768
+val_progress:20325/32768
+val_progress:20350/32768
+val_progress:20375/32768
+val_progress:20400/32768
+val_progress:20425/32768
+val_progress:20450/32768
+val_progress:20475/32768
+val_progress:20500/32768
+val_progress:20525/32768
+val_progress:20550/32768
+val_progress:20575/32768
+val_progress:20600/32768
+val_progress:20625/32768
+val_progress:20650/32768
+val_progress:20675/32768
+val_progress:20700/32768
+val_progress:20725/32768
+val_progress:20750/32768
+val_progress:20775/32768
+val_progress:20800/32768
+val_progress:20825/32768
+val_progress:20850/32768
+val_progress:20875/32768
+val_progress:20900/32768
+val_progress:20925/32768
+val_progress:20950/32768
+val_progress:20975/32768
+val_progress:21000/32768
+val_progress:21025/32768
+val_progress:21050/32768
+val_progress:21075/32768
+val_progress:21100/32768
+val_progress:21125/32768
+val_progress:21150/32768
+val_progress:21175/32768
+val_progress:21200/32768
+val_progress:21225/32768
+val_progress:21250/32768
+val_progress:21275/32768
+val_progress:21300/32768
+val_progress:21325/32768
+val_progress:21350/32768
+val_progress:21375/32768
+val_progress:21400/32768
+val_progress:21425/32768
+val_progress:21450/32768
+val_progress:21475/32768
+val_progress:21500/32768
+val_progress:21525/32768
+val_progress:21550/32768
+val_progress:21575/32768
+val_progress:21600/32768
+val_progress:21625/32768
+val_progress:21650/32768
+val_progress:21675/32768
+val_progress:21700/32768
+val_progress:21725/32768
+val_progress:21750/32768
+val_progress:21775/32768
+val_progress:21800/32768
+val_progress:21825/32768
+val_progress:21850/32768
+val_progress:21875/32768
+val_progress:21900/32768
+val_progress:21925/32768
+val_progress:21950/32768
+val_progress:21975/32768
+val_progress:22000/32768
+val_progress:22025/32768
+val_progress:22050/32768
+val_progress:22075/32768
+val_progress:22100/32768
+val_progress:22125/32768
+val_progress:22150/32768
+val_progress:22175/32768
+val_progress:22200/32768
+val_progress:22225/32768
+val_progress:22250/32768
+val_progress:22275/32768
+val_progress:22300/32768
+val_progress:22325/32768
+val_progress:22350/32768
+val_progress:22375/32768
+val_progress:22400/32768
+val_progress:22425/32768
+val_progress:22450/32768
+val_progress:22475/32768
+val_progress:22500/32768
+val_progress:22525/32768
+val_progress:22550/32768
+val_progress:22575/32768
+val_progress:22600/32768
+val_progress:22625/32768
+val_progress:22650/32768
+val_progress:22675/32768
+val_progress:22700/32768
+val_progress:22725/32768
+val_progress:22750/32768
+val_progress:22775/32768
+val_progress:22800/32768
+val_progress:22825/32768
+val_progress:22850/32768
+val_progress:22875/32768
+val_progress:22900/32768
+val_progress:22925/32768
+val_progress:22950/32768
+val_progress:22975/32768
+val_progress:23000/32768
+val_progress:23025/32768
+val_progress:23050/32768
+val_progress:23075/32768
+val_progress:23100/32768
+val_progress:23125/32768
+val_progress:23150/32768
+val_progress:23175/32768
+val_progress:23200/32768
+val_progress:23225/32768
+val_progress:23250/32768
+val_progress:23275/32768
+val_progress:23300/32768
+val_progress:23325/32768
+val_progress:23350/32768
+val_progress:23375/32768
+val_progress:23400/32768
+val_progress:23425/32768
+val_progress:23450/32768
+val_progress:23475/32768
+val_progress:23500/32768
+val_progress:23525/32768
+val_progress:23550/32768
+val_progress:23575/32768
+val_progress:23600/32768
+val_progress:23625/32768
+val_progress:23650/32768
+val_progress:23675/32768
+val_progress:23700/32768
+val_progress:23725/32768
+val_progress:23750/32768
+val_progress:23775/32768
+val_progress:23800/32768
+val_progress:23825/32768
+val_progress:23850/32768
+val_progress:23875/32768
+val_progress:23900/32768
+val_progress:23925/32768
+val_progress:23950/32768
+val_progress:23975/32768
+val_progress:24000/32768
+val_progress:24025/32768
+val_progress:24050/32768
+val_progress:24075/32768
+val_progress:24100/32768
+val_progress:24125/32768
+val_progress:24150/32768
+val_progress:24175/32768
+val_progress:24200/32768
+val_progress:24225/32768
+val_progress:24250/32768
+val_progress:24275/32768
+val_progress:24300/32768
+val_progress:24325/32768
+val_progress:24350/32768
+val_progress:24375/32768
+val_progress:24400/32768
+val_progress:24425/32768
+val_progress:24450/32768
+val_progress:24475/32768
+val_progress:24500/32768
+val_progress:24525/32768
+val_progress:24550/32768
+val_progress:24575/32768
+val_progress:24600/32768
+val_progress:24625/32768
+val_progress:24650/32768
+val_progress:24675/32768
+val_progress:24700/32768
+val_progress:24725/32768
+val_progress:24750/32768
+val_progress:24775/32768
+val_progress:24800/32768
+val_progress:24825/32768
+val_progress:24850/32768
+val_progress:24875/32768
+val_progress:24900/32768
+val_progress:24925/32768
+val_progress:24950/32768
+val_progress:24975/32768
+val_progress:25000/32768
+val_progress:25025/32768
+val_progress:25050/32768
+val_progress:25075/32768
+val_progress:25100/32768
+val_progress:25125/32768
+val_progress:25150/32768
+val_progress:25175/32768
+val_progress:25200/32768
+val_progress:25225/32768
+val_progress:25250/32768
+val_progress:25275/32768
+val_progress:25300/32768
+val_progress:25325/32768
+val_progress:25350/32768
+val_progress:25375/32768
+val_progress:25400/32768
+val_progress:25425/32768
+val_progress:25450/32768
+val_progress:25475/32768
+val_progress:25500/32768
+val_progress:25525/32768
+val_progress:25550/32768
+val_progress:25575/32768
+val_progress:25600/32768
+val_progress:25625/32768
+val_progress:25650/32768
+val_progress:25675/32768
+val_progress:25700/32768
+val_progress:25725/32768
+val_progress:25750/32768
+val_progress:25775/32768
+val_progress:25800/32768
+val_progress:25825/32768
+val_progress:25850/32768
+val_progress:25875/32768
+val_progress:25900/32768
+val_progress:25925/32768
+val_progress:25950/32768
+val_progress:25975/32768
+val_progress:26000/32768
+val_progress:26025/32768
+val_progress:26050/32768
+val_progress:26075/32768
+val_progress:26100/32768
+val_progress:26125/32768
+val_progress:26150/32768
+val_progress:26175/32768
+val_progress:26200/32768
+val_progress:26225/32768
+val_progress:26250/32768
+val_progress:26275/32768
+val_progress:26300/32768
+val_progress:26325/32768
+val_progress:26350/32768
+val_progress:26375/32768
+val_progress:26400/32768
+val_progress:26425/32768
+val_progress:26450/32768
+val_progress:26475/32768
+val_progress:26500/32768
+val_progress:26525/32768
+val_progress:26550/32768
+val_progress:26575/32768
+val_progress:26600/32768
+val_progress:26625/32768
+val_progress:26650/32768
+val_progress:26675/32768
+val_progress:26700/32768
+val_progress:26725/32768
+val_progress:26750/32768
+val_progress:26775/32768
+val_progress:26800/32768
+val_progress:26825/32768
+val_progress:26850/32768
+val_progress:26875/32768
+val_progress:26900/32768
+val_progress:26925/32768
+val_progress:26950/32768
+val_progress:26975/32768
+val_progress:27000/32768
+val_progress:27025/32768
+val_progress:27050/32768
+val_progress:27075/32768
+val_progress:27100/32768
+val_progress:27125/32768
+val_progress:27150/32768
+val_progress:27175/32768
+val_progress:27200/32768
+val_progress:27225/32768
+val_progress:27250/32768
+val_progress:27275/32768
+val_progress:27300/32768
+val_progress:27325/32768
+val_progress:27350/32768
+val_progress:27375/32768
+val_progress:27400/32768
+val_progress:27425/32768
+val_progress:27450/32768
+val_progress:27475/32768
+val_progress:27500/32768
+val_progress:27525/32768
+val_progress:27550/32768
+val_progress:27575/32768
+val_progress:27600/32768
+val_progress:27625/32768
+val_progress:27650/32768
+val_progress:27675/32768
+val_progress:27700/32768
+val_progress:27725/32768
+val_progress:27750/32768
+val_progress:27775/32768
+val_progress:27800/32768
+val_progress:27825/32768
+val_progress:27850/32768
+val_progress:27875/32768
+val_progress:27900/32768
+val_progress:27925/32768
+val_progress:27950/32768
+val_progress:27975/32768
+val_progress:28000/32768
+val_progress:28025/32768
+val_progress:28050/32768
+val_progress:28075/32768
+val_progress:28100/32768
+val_progress:28125/32768
+val_progress:28150/32768
+val_progress:28175/32768
+val_progress:28200/32768
+val_progress:28225/32768
+val_progress:28250/32768
+val_progress:28275/32768
+val_progress:28300/32768
+val_progress:28325/32768
+val_progress:28350/32768
+val_progress:28375/32768
+val_progress:28400/32768
+val_progress:28425/32768
+val_progress:28450/32768
+val_progress:28475/32768
+val_progress:28500/32768
+val_progress:28525/32768
+val_progress:28550/32768
+val_progress:28575/32768
+val_progress:28600/32768
+val_progress:28625/32768
+val_progress:28650/32768
+val_progress:28675/32768
+val_progress:28700/32768
+val_progress:28725/32768
+val_progress:28750/32768
+val_progress:28775/32768
+val_progress:28800/32768
+val_progress:28825/32768
+val_progress:28850/32768
+val_progress:28875/32768
+val_progress:28900/32768
+val_progress:28925/32768
+val_progress:28950/32768
+val_progress:28975/32768
+val_progress:29000/32768
+val_progress:29025/32768
+val_progress:29050/32768
+val_progress:29075/32768
+val_progress:29100/32768
+val_progress:29125/32768
+val_progress:29150/32768
+val_progress:29175/32768
+val_progress:29200/32768
+val_progress:29225/32768
+val_progress:29250/32768
+val_progress:29275/32768
+val_progress:29300/32768
+val_progress:29325/32768
+val_progress:29350/32768
+val_progress:29375/32768
+val_progress:29400/32768
+val_progress:29425/32768
+val_progress:29450/32768
+val_progress:29475/32768
+val_progress:29500/32768
+val_progress:29525/32768
+val_progress:29550/32768
+val_progress:29575/32768
+val_progress:29600/32768
+val_progress:29625/32768
+val_progress:29650/32768
+val_progress:29675/32768
+val_progress:29700/32768
+val_progress:29725/32768
+val_progress:29750/32768
+val_progress:29775/32768
+val_progress:29800/32768
+val_progress:29825/32768
+val_progress:29850/32768
+val_progress:29875/32768
+val_progress:29900/32768
+val_progress:29925/32768
+val_progress:29950/32768
+val_progress:29975/32768
+val_progress:30000/32768
+val_progress:30025/32768
+val_progress:30050/32768
+val_progress:30075/32768
+val_progress:30100/32768
+val_progress:30125/32768
+val_progress:30150/32768
+val_progress:30175/32768
+val_progress:30200/32768
+val_progress:30225/32768
+val_progress:30250/32768
+val_progress:30275/32768
+val_progress:30300/32768
+val_progress:30325/32768
+val_progress:30350/32768
+val_progress:30375/32768
+val_progress:30400/32768
+val_progress:30425/32768
+val_progress:30450/32768
+val_progress:30475/32768
+val_progress:30500/32768
+val_progress:30525/32768
+val_progress:30550/32768
+val_progress:30575/32768
+val_progress:30600/32768
+val_progress:30625/32768
+val_progress:30650/32768
+val_progress:30675/32768
+val_progress:30700/32768
+val_progress:30725/32768
+val_progress:30750/32768
+val_progress:30775/32768
+val_progress:30800/32768
+val_progress:30825/32768
+val_progress:30850/32768
+val_progress:30875/32768
+val_progress:30900/32768
+val_progress:30925/32768
+val_progress:30950/32768
+val_progress:30975/32768
+val_progress:31000/32768
+val_progress:31025/32768
+val_progress:31050/32768
+val_progress:31075/32768
+val_progress:31100/32768
+val_progress:31125/32768
+val_progress:31150/32768
+val_progress:31175/32768
+val_progress:31200/32768
+val_progress:31225/32768
+val_progress:31250/32768
+val_progress:31275/32768
+val_progress:31300/32768
+val_progress:31325/32768
+val_progress:31350/32768
+val_progress:31375/32768
+val_progress:31400/32768
+val_progress:31425/32768
+val_progress:31450/32768
+val_progress:31475/32768
+val_progress:31500/32768
+val_progress:31525/32768
+val_progress:31550/32768
+val_progress:31575/32768
+val_progress:31600/32768
+val_progress:31625/32768
+val_progress:31650/32768
+val_progress:31675/32768
+val_progress:31700/32768
+val_progress:31725/32768
+val_progress:31750/32768
+val_progress:31775/32768
+val_progress:31800/32768
+val_progress:31825/32768
+val_progress:31850/32768
+val_progress:31875/32768
+val_progress:31900/32768
+val_progress:31925/32768
+val_progress:31950/32768
+val_progress:31975/32768
+val_progress:32000/32768
+val_progress:32025/32768
+val_progress:32050/32768
+val_progress:32075/32768
+val_progress:32100/32768
+val_progress:32125/32768
+val_progress:32150/32768
+val_progress:32175/32768
+val_progress:32200/32768
+val_progress:32225/32768
+val_progress:32250/32768
+val_progress:32275/32768
+val_progress:32300/32768
+val_progress:32325/32768
+val_progress:32350/32768
+val_progress:32375/32768
+val_progress:32400/32768
+val_progress:32425/32768
+val_progress:32450/32768
+val_progress:32475/32768
+val_progress:32500/32768
+val_progress:32525/32768
+val_progress:32550/32768
+val_progress:32575/32768
+val_progress:32600/32768
+val_progress:32625/32768
+val_progress:32650/32768
+val_progress:32675/32768
+val_progress:32700/32768
+val_progress:32725/32768
+val_progress:32750/32768
+val_progress:32768/32768
+final_int8_zlib_roundtrip val_loss:3.2130 val_bpb:1.9095 eval_time:384512ms
+final_int8_zlib_roundtrip_exact val_loss:3.21304585 val_bpb:1.90952976

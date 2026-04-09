@@ -1,0 +1,83 @@
+{
+  "buffer_seconds": 90,
+  "experiments": [
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "FP4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "fp4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Randomized-Hadamard rotation plus FP4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "1337",
+        "SCALAR_QUANTIZER": "fp4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "AF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "af4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Randomized-Hadamard rotation plus AF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "1337",
+        "SCALAR_QUANTIZER": "af4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    }
+  ]
+}

@@ -1,0 +1,177 @@
+{
+  "buffer_seconds": 90,
+  "experiments": [
+    {
+      "run_tag": "2026-04-02_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_rotseed7_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_rotseed7_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard input-column rotation fused into weight-only INT6 grouped RTN quantization with fp16 tied head and lzma serialization; alternate deterministic seed 7",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "7",
+        "SCALAR_QUANTIZER": "uniform"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_rotseed2026_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_rotseed2026_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard input-column rotation fused into weight-only INT6 grouped RTN quantization with fp16 tied head and lzma serialization; alternate deterministic seed 2026",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "2026",
+        "SCALAR_QUANTIZER": "uniform"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_rotseed7_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_rotseed7_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: SignRound-inspired per-group reconstruction search on randomized-Hadamard rotated uniform INT5 group-of-64 quantization with fp16 tied head and lzma serialization; 128 deterministic calibration sequences, alternate seed 7",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "SCALAR_QUANTIZER": "uniform",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "7",
+        "ROUND_OPT_METHOD": "signroundlite",
+        "ROUND_OPT_CALIBRATION_SEQS": "128",
+        "ROUND_OPT_CALIBRATION_BATCH_TOKENS": "8192",
+        "ROUND_OPT_MAX_ROWS_PER_OBSERVE": "64",
+        "ROUND_OPT_SCALE_GRID": "0.85,1.0,1.15",
+        "ROUND_OPT_BIAS_GRID": "-0.375,-0.1875,0.0,0.1875,0.375",
+        "ROUND_OPT_USE_FULL_HESSIAN": "1",
+        "ROUND_OPT_ROWWISE_SELECTION": "1"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_rotseed2026_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_rotseed2026_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: SignRound-inspired per-group reconstruction search on randomized-Hadamard rotated uniform INT5 group-of-64 quantization with fp16 tied head and lzma serialization; 128 deterministic calibration sequences, alternate seed 2026",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "SCALAR_QUANTIZER": "uniform",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "2026",
+        "ROUND_OPT_METHOD": "signroundlite",
+        "ROUND_OPT_CALIBRATION_SEQS": "128",
+        "ROUND_OPT_CALIBRATION_BATCH_TOKENS": "8192",
+        "ROUND_OPT_MAX_ROWS_PER_OBSERVE": "64",
+        "ROUND_OPT_SCALE_GRID": "0.85,1.0,1.15",
+        "ROUND_OPT_BIAS_GRID": "-0.375,-0.1875,0.0,0.1875,0.375",
+        "ROUND_OPT_USE_FULL_HESSIAN": "1",
+        "ROUND_OPT_ROWWISE_SELECTION": "1"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_rotseed7_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_rotseed7_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard rotation plus NF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization; alternate deterministic seed 7",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "7",
+        "SCALAR_QUANTIZER": "nf4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_rotseed2026_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_rotseed2026_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard rotation plus NF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization; alternate deterministic seed 2026",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "2026",
+        "SCALAR_QUANTIZER": "nf4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_rotseed7_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_rotseed7_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard rotation plus AF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization; alternate deterministic seed 7",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "7",
+        "SCALAR_QUANTIZER": "af4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    },
+    {
+      "run_tag": "2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_rotseed2026_val32768_skipfloat",
+      "script_path": "research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_rotseed2026_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "review",
+      "description": "SpinQuant-inspired rotation-seed sweep: randomized-Hadamard rotation plus AF4-style scalar codebook on the INT4 grouped body with fp16 tied head and lzma serialization; alternate deterministic seed 2026",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "hadamard",
+        "ROTATION_SEED": "2026",
+        "SCALAR_QUANTIZER": "af4",
+        "LOWRANK_RESIDUAL_RANK": "0"
+      }
+    }
+  ]
+}

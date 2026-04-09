@@ -1,0 +1,21 @@
+[launcher] waiting for lowrank_queue_20260330
+[launcher] starting 2026-03-30_nf4_queue.json
+[queue] 1/4 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_val32768_skipfloat: 0
+[queue] logged 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_val32768_skipfloat val_bpb=1.91926966 artifact_bytes=6453082 time=16:39.47 rss=1542193152 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 2/4 2026-03-30_mlx_quick_int4_group64_headint8_lzma_nf4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-30_mlx_quick_int4_group64_headint8_lzma_nf4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-30_mlx_quick_int4_group64_headint8_lzma_nf4_val32768_skipfloat: 0
+[queue] logged 2026-03-30_mlx_quick_int4_group64_headint8_lzma_nf4_val32768_skipfloat val_bpb=1.96536392 artifact_bytes=5968554 time=16:39.27 rss=1540882432 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 3/4 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_val32768_skipfloat: 0
+[queue] logged 2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_val32768_skipfloat val_bpb=1.91585948 artifact_bytes=6567758 time=16:40.15 rss=1541603328 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 4/4 2026-03-30_mlx_quick_int4_group64_headint8_lzma_rht_nf4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-03-30_mlx_quick_int4_group64_headint8_lzma_rht_nf4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-03-30_mlx_quick_int4_group64_headint8_lzma_rht_nf4_val32768_skipfloat: 0
+[queue] logged 2026-03-30_mlx_quick_int4_group64_headint8_lzma_rht_nf4_val32768_skipfloat val_bpb=1.97450040 artifact_bytes=6091642 time=16:39.59 rss=1541373952 status=maybe

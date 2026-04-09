@@ -1,0 +1,29 @@
+[queue] 1/6 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat val_bpb=1.94582243 artifact_bytes=4965347 time=16:47.08 rss=1540816896 status=review
+[queue] sleeping 90.0s before next run
+[queue] 2/6 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat val_bpb=1.94992398 artifact_bytes=5118327 time=16:50.73 rss=1542995968 status=review
+[queue] sleeping 90.0s before next run
+[queue] 3/6 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_signroundlite_calib128_val32768_skipfloat val_bpb=1.91132505 artifact_bytes=7186879 time=16:47.78 rss=1543208960 status=review
+[queue] sleeping 90.0s before next run
+[queue] 4/6 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_signroundlite_calib128_val32768_skipfloat val_bpb=1.90693169 artifact_bytes=7344331 time=16:53.47 rss=1542832128 status=review
+[queue] sleeping 90.0s before next run
+[queue] 5/6 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_nf4_signroundlite_calib128_val32768_skipfloat val_bpb=1.91733550 artifact_bytes=6365991 time=16:49.95 rss=1543651328 status=review
+[queue] sleeping 90.0s before next run
+[queue] 6/6 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_signroundlite_calib128_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_signroundlite_calib128_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_signroundlite_calib128_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_nf4_signroundlite_calib128_val32768_skipfloat val_bpb=1.91957215 artifact_bytes=6494743 time=16:54.37 rss=1543143424 status=review

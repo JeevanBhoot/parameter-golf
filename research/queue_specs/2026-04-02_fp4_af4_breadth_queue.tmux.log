@@ -1,0 +1,19 @@
+[queue] 1/4 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_fp4_val32768_skipfloat val_bpb=1.95110242 artifact_bytes=6563991 time=16:57.55 rss=1540833280 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 2/4 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_fp4_val32768_skipfloat val_bpb=1.95381690 artifact_bytes=6556999 time=16:42.40 rss=1541931008 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 3/4 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_af4_val32768_skipfloat val_bpb=1.91626946 artifact_bytes=7053839 time=16:39.56 rss=1541668864 status=maybe
+[queue] sleeping 90.0s before next run
+[queue] 4/4 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat
+[queue] launching /usr/bin/time -p /Users/jeebho01/parameter-golf/.venv/bin/python3 /Users/jeebho01/parameter-golf/research/2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat/train_gpt_mlx.py
+[queue] return code for 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat: 0
+[queue] logged 2026-04-02_mlx_quick_int4_group64_tiedemb_fp16_lzma_rht_af4_val32768_skipfloat val_bpb=1.91166653 artifact_bytes=7065611 time=16:40.16 rss=1542078464 status=maybe

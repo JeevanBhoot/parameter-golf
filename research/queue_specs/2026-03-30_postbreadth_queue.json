@@ -1,0 +1,185 @@
+{
+  "buffer_seconds": 90,
+  "experiments": [
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_gptqlite_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_tiedemb_fp16_lzma_rht_gptqlite_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Depth follow-up on the strongest new family: randomized-Hadamard rotation plus GPTQ-lite block-diagonal calibration on the INT6 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "gptq",
+        "INPUT_ROTATION": "hadamard",
+        "SCALAR_QUANTIZER": "uniform",
+        "GPTQ_CALIBRATION_SEQS": "128",
+        "GPTQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "GPTQ_HESSIAN_GROUP_SIZE": "64",
+        "GPTQ_MAX_ROWS_PER_OBSERVE": "64",
+        "GPTQ_DAMP_PERCENT": "0.01",
+        "GPTQ_ACT_ORDER": "1",
+        "ROTATION_SEED": "1337"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int6_group64_headint8_lzma_rht_gptqlite_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int6_group64_headint8_lzma_rht_gptqlite_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Randomized-Hadamard rotation plus GPTQ-lite block-diagonal calibration on the INT6 grouped body with an INT8 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "31",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "gptq",
+        "INPUT_ROTATION": "hadamard",
+        "SCALAR_QUANTIZER": "uniform",
+        "GPTQ_CALIBRATION_SEQS": "128",
+        "GPTQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "GPTQ_HESSIAN_GROUP_SIZE": "64",
+        "GPTQ_MAX_ROWS_PER_OBSERVE": "64",
+        "GPTQ_DAMP_PERCENT": "0.01",
+        "GPTQ_ACT_ORDER": "1",
+        "ROTATION_SEED": "1337"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_gptqlite_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_tiedemb_fp16_lzma_rht_gptqlite_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Randomized-Hadamard rotation plus GPTQ-lite block-diagonal calibration on the INT5 grouped body with fp16 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "gptq",
+        "INPUT_ROTATION": "hadamard",
+        "SCALAR_QUANTIZER": "uniform",
+        "GPTQ_CALIBRATION_SEQS": "128",
+        "GPTQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "GPTQ_HESSIAN_GROUP_SIZE": "64",
+        "GPTQ_MAX_ROWS_PER_OBSERVE": "64",
+        "GPTQ_DAMP_PERCENT": "0.01",
+        "GPTQ_ACT_ORDER": "1",
+        "ROTATION_SEED": "1337"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint8_lzma_rht_gptqlite_calib128_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint8_lzma_rht_gptqlite_calib128_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Randomized-Hadamard rotation plus GPTQ-lite block-diagonal calibration on the INT5 grouped body with an INT8 tied head and lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "gptq",
+        "INPUT_ROTATION": "hadamard",
+        "SCALAR_QUANTIZER": "uniform",
+        "GPTQ_CALIBRATION_SEQS": "128",
+        "GPTQ_CALIBRATION_BATCH_TOKENS": "8192",
+        "GPTQ_HESSIAN_GROUP_SIZE": "64",
+        "GPTQ_MAX_ROWS_PER_OBSERVE": "64",
+        "GPTQ_DAMP_PERCENT": "0.01",
+        "GPTQ_ACT_ORDER": "1",
+        "ROTATION_SEED": "1337"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_tiedemb_fp16_lzma_sparseresid001_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_tiedemb_fp16_lzma_sparseresid001_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Sparse residual correction family: after INT5 grouped RTN plus fp16 tied head, keep the top 0.1% post-quantization residual weights as fp16 sparse corrections before lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "uniform",
+        "SPARSE_RESIDUAL_FRAC": "0.001"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int5_group64_headint8_lzma_sparseresid001_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int5_group64_headint8_lzma_sparseresid001_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Sparse residual correction on the INT5 grouped body with an INT8 tied head; keep the top 0.1% post-quantization residual weights as fp16 sparse corrections before lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "15",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "uniform",
+        "SPARSE_RESIDUAL_FRAC": "0.001"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_sparseresid002_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int4_group64_tiedemb_fp16_lzma_sparseresid002_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Sparse residual correction on the INT4 grouped body with fp16 tied head; keep the top 0.2% post-quantization residual weights as fp16 sparse corrections before lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QUANTIZE_TIED_HEAD": "0",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "uniform",
+        "SPARSE_RESIDUAL_FRAC": "0.002"
+      }
+    },
+    {
+      "run_tag": "2026-03-30_mlx_quick_int4_group64_headint8_lzma_sparseresid002_val32768_skipfloat",
+      "script_path": "research/2026-03-30_mlx_quick_int4_group64_headint8_lzma_sparseresid002_val32768_skipfloat/train_gpt_mlx.py",
+      "results_file": "research/results_subset32768_skipfloat.tsv",
+      "status": "maybe",
+      "description": "Sparse residual correction on the INT4 grouped body with an INT8 tied head; keep the top 0.2% post-quantization residual weights as fp16 sparse corrections before lzma serialization",
+      "env": {
+        "VAL_SUBSET_SEQS": "32768",
+        "SKIP_FINAL_FLOAT_VAL": "1",
+        "GROUP_SIZE": "64",
+        "QMAX_BODY": "7",
+        "QMAX_HEAD": "127",
+        "QUANTIZE_TIED_HEAD": "1",
+        "AWQ_ENABLED": "0",
+        "QUANT_METHOD": "rtn",
+        "INPUT_ROTATION": "none",
+        "SCALAR_QUANTIZER": "uniform",
+        "SPARSE_RESIDUAL_FRAC": "0.002"
+      }
+    }
+  ]
+}

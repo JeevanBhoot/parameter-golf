@@ -148,10 +148,21 @@ def resolve_experiment_paths(repo_root: Path, experiment: dict) -> tuple[Path, P
     return script_path, run_dir
 
 
+def resolve_experiment_python(repo_root: Path, env: dict[str, str]) -> str:
+    override = env.get("QUEUE_PYTHON") or os.environ.get("QUEUE_PYTHON")
+    if override:
+        return override
+    for candidate in (repo_root / ".venv" / "bin" / "python3", repo_root / ".venv" / "bin" / "python"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return sys.executable
+
+
 def launch_experiment(repo_root: Path, script_path: Path, run_dir: Path, env: dict[str, str]) -> int:
     stdout_path = run_dir / "stdout.log"
     time_path = run_dir / "time.log"
-    cmd = ["/usr/bin/time", "-p", sys.executable, str(script_path)]
+    python_executable = resolve_experiment_python(repo_root, env)
+    cmd = ["/usr/bin/time", "-p", python_executable, str(script_path)]
     print(f"[queue] launching {' '.join(cmd)}")
     with stdout_path.open("wb") as stdout_handle, time_path.open("wb") as time_handle:
         completed = subprocess.run(
